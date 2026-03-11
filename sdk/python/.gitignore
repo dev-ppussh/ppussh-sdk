@@ -1,0 +1,28 @@
+# Python virtual environment
+.venv/
+venv/
+env/
+
+# Build artifacts
+dist/
+*.egg-info/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+build/
+*.tar.gz
+*.whl
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# mypy / type checkers
+.mypy_cache/
+.ruff_cache/

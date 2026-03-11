@@ -1,0 +1,54 @@
+{
+  "name": "ppussh",
+  "version": "0.1.0",
+  "description": "PPUSSH Ecosystem SDK — Accounts (OIDC) + Payments client for TypeScript/JavaScript",
+  "license": "MIT",
+  "author": "PPUSSH <dev@ppussh.com>",
+  "homepage": "https://github.com/ppussh/ppussh-ts#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ppussh/ppussh-ts.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ppussh/ppussh-ts/issues"
+  },
+  "keywords": [
+    "ppussh",
+    "oidc",
+    "oauth2",
+    "authentication",
+    "payments",
+    "subscriptions",
+    "sdk"
+  ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "axios": "^1.13.6"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.37",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
