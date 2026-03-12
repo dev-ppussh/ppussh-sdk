@@ -37,6 +37,7 @@ export class AccountsNamespace {
   private readonly _clientId: string;
   private readonly _clientSecret: string;
   private readonly _accountsUrl: string;
+  private readonly _accountsFrontendUrl: string;
 
   private _accessToken: string | null = null;
   private _refreshToken: string | null = null;
@@ -44,12 +45,13 @@ export class AccountsNamespace {
 
   constructor(
     transport: HttpTransport,
-    options: { clientId: string; clientSecret: string; accountsUrl: string },
+    options: { clientId: string; clientSecret: string; accountsUrl: string; accountsFrontendUrl: string },
   ) {
     this._http = transport;
     this._clientId = options.clientId;
     this._clientSecret = options.clientSecret;
     this._accountsUrl = options.accountsUrl;
+    this._accountsFrontendUrl = options.accountsFrontendUrl;
   }
 
   // ── Login URL builder ──────────────────────────────────────────────────────
@@ -82,7 +84,7 @@ export class AccountsNamespace {
     if (opts?.nextUrl) {
       params.set("next", opts.nextUrl);
     }
-    return `${this._accountsUrl}/login?${params.toString()}`;
+    return `${this._accountsFrontendUrl}/login?${params.toString()}`;
   }
 
   // ── OIDC token exchange ────────────────────────────────────────────────────

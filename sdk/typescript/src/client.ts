@@ -35,6 +35,7 @@ import { PaymentsNamespace } from "./payments/namespace";
 
 // ── Environment variable names ───────────────────────────────────────────────
 const ENV_ACCOUNTS_URL = "PPUSSH_ACCOUNTS_URL";
+const ENV_ACCOUNTS_FRONTEND_URL = "PPUSSH_ACCOUNTS_FRONTEND_URL";
 const ENV_PAYMENTS_URL = "PPUSSH_PAYMENTS_URL";
 
 function resolveUrl(kwarg: string | undefined, envVar: string, label: string): string {
@@ -64,6 +65,11 @@ export interface PpusshClientOptions {
    */
   accountsUrl?: string;
   /**
+   * Accounts service base URL. Falls back to the PPUSSH_ACCOUNTS_FRONTEND_URL env var.
+   * Required — one of the two must be set.
+   */
+  accountsFrontendUrl?: string;
+  /**
    * Payments service base URL. Falls back to the PPUSSH_PAYMENTS_URL env var.
    * Required — one of the two must be set.
    */
@@ -75,6 +81,7 @@ export class PpusshClient {
   readonly payments: PaymentsNamespace;
 
   private readonly _accountsUrl: string;
+  private readonly _accountsFrontendUrl: string;
   private readonly _paymentsUrl: string;
   private readonly _accountsTransport: HttpTransport;
   private readonly _paymentsTransport: HttpTransport;
@@ -84,8 +91,8 @@ export class PpusshClient {
     if (!options.clientSecret) throw new Error("clientSecret must not be empty.");
 
     this._accountsUrl = resolveUrl(options.accountsUrl, ENV_ACCOUNTS_URL, "Accounts");
+    this._accountsFrontendUrl = resolveUrl(options.accountsFrontendUrl, ENV_ACCOUNTS_FRONTEND_URL, "Accounts Frontend")
     this._paymentsUrl = resolveUrl(options.paymentsUrl, ENV_PAYMENTS_URL, "Payments");
-
     this._accountsTransport = new HttpTransport(this._accountsUrl);
     this._paymentsTransport = new HttpTransport(this._paymentsUrl);
 
@@ -93,6 +100,7 @@ export class PpusshClient {
       clientId: options.clientId,
       clientSecret: options.clientSecret,
       accountsUrl: this._accountsUrl,
+      accountsFrontendUrl: this._accountsFrontendUrl
     });
 
     this.payments = new PaymentsNamespace(this._paymentsTransport, {
@@ -105,12 +113,17 @@ export class PpusshClient {
     return this._accountsUrl;
   }
 
+  /** Resolved Accounts frontend service base URL. */
+  get accountsFrontendUrl(): string {
+    return this._accountsFrontendUrl;
+  }
+
   /** Resolved Payments service base URL. */
   get paymentsUrl(): string {
     return this._paymentsUrl;
   }
 
   toString(): string {
-    return `PpusshClient(accountsUrl=${this._accountsUrl}, paymentsUrl=${this._paymentsUrl})`;
+    return `PpusshClient(accountsUrl=${this._accountsUrl}, accountsFrontendUrl=${this._accountsFrontendUrl}, paymentsUrl=${this._paymentsUrl})`;
   }
 }

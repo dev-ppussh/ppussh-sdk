@@ -56,11 +56,13 @@ class AccountsNamespace:
         client_id: str,
         client_secret: str,
         accounts_url: str,
+        accounts_frontend_url
     ) -> None:
         self._http = transport
         self._client_id = client_id
         self._client_secret = client_secret
         self._accounts_url = accounts_url
+        self._accounts_frontend_url = accounts_frontend_url
 
         # ── Stored session state ───────────────────────────────────────────────
         self._access_token: str | None = None
@@ -110,7 +112,7 @@ class AccountsNamespace:
         }
         if next_url:
             params["next"] = next_url
-        return f"{self._accounts_url}/login?{urlencode(params)}"
+        return f"{self._accounts_frontend_url}/login?{urlencode(params)}"
 
     # ── OIDC token exchange ────────────────────────────────────────────────────
 

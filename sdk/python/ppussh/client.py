@@ -17,6 +17,7 @@ Minimal — just client_id + client_secret:
     from ppussh import PpusshClient
 
     os.environ["PPUSSH_ACCOUNTS_URL"] = "https://accounts.example.com"
+    os.environ["PPUSSH_ACCOUNTS_FRONTEND_URL"] = "https://accounts.example.com"
     os.environ["PPUSSH_PAYMENTS_URL"] = "https://payments.example.com"
 
     client = PpusshClient(
@@ -64,6 +65,7 @@ from ppussh.payments.namespace import PaymentsNamespace
 
 # ── Environment variable names ─────────────────────────────────────────────────
 _ENV_ACCOUNTS_URL: Final = "PPUSSH_ACCOUNTS_URL"
+_ENV_ACCOUNTS_FRONTEND_URL: Final = "PPUSSH_ACCOUNTS_FRONTEND_URL"
 _ENV_PAYMENTS_URL: Final = "PPUSSH_PAYMENTS_URL"
 
 
@@ -123,6 +125,7 @@ class PpusshClient:
         *,
         payments_admin_key: str | None = None,
         accounts_url: str | None = None,
+        accounts_frontend_url: str | None = None,
         payments_url: str | None = None,
     ) -> None:
         if not client_id:
@@ -131,6 +134,7 @@ class PpusshClient:
             raise ValueError("client_secret must not be empty.")
 
         self._accounts_url = _resolve_url(accounts_url, _ENV_ACCOUNTS_URL, "Accounts")
+        self._accounts_frontend_url = _resolve_url(accounts_frontend_url, _ENV_ACCOUNTS_FRONTEND_URL, "Accounts Frontend")
         self._payments_url = _resolve_url(payments_url, _ENV_PAYMENTS_URL, "Payments")
 
         # One transport per service — each owns its own httpx.AsyncClient
@@ -142,6 +146,7 @@ class PpusshClient:
             client_id=client_id,
             client_secret=client_secret,
             accounts_url=self._accounts_url,
+            accounts_frontend_url=self._accounts_frontend_url
         )
         self.payments = PaymentsNamespace(
             self._payments_transport,
@@ -172,7 +177,10 @@ class PpusshClient:
     def accounts_url(self) -> str:
         """Resolved Accounts service base URL."""
         return self._accounts_url
-
+    @property
+    def accounts_frontend_url(self) -> str:
+        """Resolved Accounts frontend service base URL."""
+        return self._accounts_frontend_url
     @property
     def payments_url(self) -> str:
         """Resolved Payments service base URL."""
@@ -182,5 +190,6 @@ class PpusshClient:
         return (
             f"PpusshClient("
             f"accounts_url={self._accounts_url!r}, "
+            f"accounts_frontend_url={self._accounts_frontend_url!r}, "
             f"payments_url={self._payments_url!r})"
         )

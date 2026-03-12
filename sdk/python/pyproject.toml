@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ppussh"
-version = "0.1.0"
+version = "0.1.2"
 description = "PPUSSH Ecosystem SDK — Accounts (OIDC) + Payments client for Python"
 readme = "README.md"
 license = { text = "MIT" }
