@@ -38,6 +38,7 @@ export interface PlanResponse {
   currency: string; // ISO 4217 e.g. "USD"
   billing_cycle: "monthly" | "yearly";
   status: "active" | "archived";
+  features: Record<string, unknown>[] | null; // e.g. [{code: "premium_nodes", name: "Premium AI Nodes", limit: 500}]
   created_at: string; // ISO 8601
 }
 
@@ -49,7 +50,8 @@ export type SubscriptionStatus =
   | "past_due"
   | "paused"
   | "cancelled"
-  | "unpaid";
+  | "unpaid"
+  | "pending_payment";
 
 /** Response from POST /subscriptions or GET /subscriptions/{id}. */
 export interface SubscriptionResponse {
@@ -63,6 +65,7 @@ export interface SubscriptionResponse {
   current_period_end: string | null;
   cancelled_at: string | null;
   trial_ends_at: string | null;
+  checkout_url: string | null; // Hosted checkout page (only on create)
   created_at: string; // ISO 8601
   updated_at: string; // ISO 8601
 }
@@ -82,7 +85,30 @@ export interface SubscriptionCreateRequest {
   plan_key: string;
   idempotency_key: string;
   provider?: string | null;
+  return_url?: string | null;  // URL to redirect after checkout
   metadata?: Record<string, unknown> | null;
+}
+
+/** Request body for DELETE /subscriptions/{id}. */
+export interface SubscriptionCancelRequest {
+  cancel_immediately?: boolean;
+}
+
+/** Extended response includes checkout URL from provider */
+export interface SubscriptionResponse {
+  id: string;
+  customer_id: string;
+  plan_id: string;
+  provider: string;
+  provider_subscription_ids: Record<string, string>;
+  status: SubscriptionStatus;
+  current_period_start: string | null;
+  current_period_end: string | null;
+  cancelled_at: string | null;
+  trial_ends_at: string | null;
+  created_at: string;
+  updated_at: string;
+  checkout_url: string | null;  // Only populated on creation
 }
 
 /** Request body for DELETE /subscriptions/{id}. */
@@ -123,4 +149,13 @@ export interface MRRResponse {
   currency: string;
   by_product: MRRByProduct[];
   by_plan: MRRByPlan[];
+}
+
+// ── Access check ──────────────────────────────────────────────────────────────
+
+/** Response from POST /access/check. */
+export interface AccessResult {
+  hasAccess: boolean;
+  featureName: string | null;
+  limit: number | boolean | null;
 }

@@ -9,6 +9,7 @@ from __future__ import annotations
 from ppussh.payments.models import (
     CustomerCreateRequest,
     CustomerResponse,
+    AccessResult,
     MRRByPlan,
     MRRByProduct,
     MRRResponse,
@@ -25,6 +26,7 @@ __all__ = [
     "PaymentsNamespace",
     # Models
     "CustomerResponse",
+    "AccessResult",
     "CustomerCreateRequest",
     "PlanResponse",
     "SubscriptionResponse",

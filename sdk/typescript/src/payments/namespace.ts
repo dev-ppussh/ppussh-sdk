@@ -3,12 +3,9 @@
  * PaymentsNamespace — customer, subscription, and plan operations.
  *
  * Auth model:
- * - Customer + subscription endpoints (POST /customers, POST /subscriptions, etc.)
- *   are unauthenticated at the HTTP level — the Payments service validates the
- *   owner_user_id against Accounts internally.
- * - Admin endpoints (listPlans, getMrr) require the payments ADMIN_API_KEY
- *   sent as the `X-Admin-Key` header. Set once at PpusshClient construction
- *   time via `paymentsAdminKey`.
+ * - All endpoints accept either X-Admin-Key or X-Product-Key header.
+ * - Product API key is scoped to a specific product.
+ * - Get the product key from the Payments section in the Accounts admin console.
  *
  * Idempotency:
  * - createSubscription() requires a caller-supplied idempotencyKey.
@@ -19,6 +16,7 @@
 import { PpusshPaymentError } from "../errors";
 import { HttpTransport } from "../http";
 import {
+  AccessResult,
   CustomerCreateRequest,
   CustomerResponse,
   MRRResponse,
@@ -30,11 +28,11 @@ import {
 
 export class PaymentsNamespace {
   private readonly _http: HttpTransport;
-  private readonly _adminKey: string | null;
+  private readonly _productKey: string | null;
 
-  constructor(transport: HttpTransport, options: { adminKey?: string | null } = {}) {
+  constructor(transport: HttpTransport, options: { productKey?: string | null } = {}) {
     this._http = transport;
-    this._adminKey = options.adminKey ?? null;
+    this._productKey = options.productKey ?? null;
   }
 
   // ── Customers ──────────────────────────────────────────────────────────────
@@ -67,6 +65,7 @@ export class PaymentsNamespace {
     };
     const response = await this._http.request("POST", "/customers", {
       json: body,
+      headers: this._getAuthHeaders(),
       isPayments: true,
     });
     return response.data as CustomerResponse;
@@ -79,6 +78,7 @@ export class PaymentsNamespace {
    */
   async getCustomer(customerId: string): Promise<CustomerResponse> {
     const response = await this._http.request("GET", `/customers/${customerId}`, {
+      headers: this._getAuthHeaders(),
       isPayments: true,
     });
     return response.data as CustomerResponse;
@@ -97,6 +97,7 @@ export class PaymentsNamespace {
    * @param planKey             Plan identifier, e.g. "pro" or "enterprise".
    * @param idempotencyKey      Unique string per subscription attempt (use UUID v4).
    * @param provider            "paddle" | "dodo" | null (uses plan default).
+   * @param returnUrl          URL to redirect after checkout completes (provider redirects here).
    * @param metadata            Arbitrary key/value pairs.
    * @throws PpusshPaymentError  Various codes; see error.code for specifics.
    */
@@ -106,17 +107,20 @@ export class PaymentsNamespace {
     planKey: string;
     idempotencyKey: string;
     provider?: string | null;
+    returnUrl?: string | null;
     metadata?: Record<string, unknown> | null;
   }): Promise<SubscriptionResponse> {
-    const response = await this._http.request("POST", "/subscriptions", {
+const response = await this._http.request("POST", "/subscriptions", {
       json: {
         customer_id: options.customerId,
         payment_product_id: options.paymentProductId,
         plan_key: options.planKey,
         idempotency_key: options.idempotencyKey,
         ...(options.provider != null && { provider: options.provider }),
+        ...(options.returnUrl != null && { return_url: options.returnUrl }),
         ...(options.metadata != null && { metadata: options.metadata }),
       },
+      headers: this._getAuthHeaders(),
       isPayments: true,
     });
     return response.data as SubscriptionResponse;
@@ -147,6 +151,7 @@ export class PaymentsNamespace {
 
     const response = await this._http.request("GET", "/subscriptions", {
       params,
+      headers: this._getAuthHeaders(),
       isPayments: true,
     });
     return response.data as SubscriptionListResponse;
@@ -161,7 +166,10 @@ export class PaymentsNamespace {
     const response = await this._http.request(
       "GET",
       `/subscriptions/${subscriptionId}`,
-      { isPayments: true },
+      {
+        headers: this._getAuthHeaders(),
+        isPayments: true,
+      },
     );
     return response.data as SubscriptionResponse;
   }
@@ -185,31 +193,62 @@ export class PaymentsNamespace {
       `/subscriptions/${subscriptionId}`,
       {
         json: { cancel_immediately: options.cancelImmediately ?? false },
+        headers: this._getAuthHeaders(),
         isPayments: true,
       },
     );
     return response.data as SubscriptionResponse;
   }
 
-  // ── Plans (admin) ──────────────────────────────────────────────────────────
+  // ── Helpers ─────────────────────────────────────────────────────────────
+
+  /**
+   * Check if a customer has an active subscription.
+   *
+   * @param customerId  UUID string of the customer.
+   * @returns true if customer has an active subscription, false otherwise.
+   */
+  async hasActiveSubscription(customerId: string): Promise<boolean> {
+    try {
+      const response = await this._http.request(
+        "GET",
+        "/subscriptions",
+        {
+          params: {
+            customer_id: customerId,
+            status: "active",
+            page_size: 1,
+          },
+          headers: this._getAuthHeaders(),
+          isPayments: true,
+        },
+      );
+      const data = response.data as SubscriptionListResponse;
+      return data.total > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  // ── Plans (product-scoped) ────────────────────────────────────────────────
 
   /**
    * List all billing plans for a Payments product.
    *
-   * Requires the `paymentsAdminKey` set on PpusshClient construction.
-   * Plans with status "archived" are included — filter client-side if needed.
+   * Requires the product key to be set on PpusshClient construction.
+   * The key must be authorized for the product.
    *
    * @param paymentProductId  UUID string of the PaymentProduct.
    * @throws PpusshPaymentError  code="product_not_found" on 404.
-   * @throws Error               If no paymentsAdminKey was provided at construction.
+   * @throws Error               If no productKey was provided at construction.
    */
   async listPlans(paymentProductId: string): Promise<PlanResponse[]> {
-    this._requireAdminKey("listPlans");
+    this._requireProductKey("listPlans");
     const response = await this._http.request(
       "GET",
-      `/admin/products/${paymentProductId}/plans`,
+      `/products/${paymentProductId}/plans`,
       {
-        headers: { "X-Admin-Key": this._adminKey! },
+        headers: { "X-Product-Key": this._productKey! },
         isPayments: true,
       },
     );
@@ -222,18 +261,18 @@ export class PaymentsNamespace {
    * Returns null if the product has not yet been registered in Payments
    * (HTTP 404 is treated as a non-exceptional "not registered yet" state).
    *
-   * @throws Error  If no paymentsAdminKey was provided at construction.
+   * @throws Error  If no productKey was provided at construction.
    */
   async getProductByAccountsId(
     accountsProductId: string,
   ): Promise<PaymentProductResponse | null> {
-    this._requireAdminKey("getProductByAccountsId");
+    this._requireProductKey("getProductByAccountsId");
     try {
       const response = await this._http.request(
         "GET",
         `/admin/products/by-accounts-id/${accountsProductId}`,
         {
-          headers: { "X-Admin-Key": this._adminKey! },
+          headers: { "X-Product-Key": this._productKey! },
           isPayments: true,
         },
       );
@@ -246,12 +285,50 @@ export class PaymentsNamespace {
     }
   }
 
-  // ── Analytics (admin) ──────────────────────────────────────────────────────
+  // ── Access check ───────────────────────────────────────────────────────────
+
+  /**
+   * Check whether a user has access to a specific feature based on their
+   * active subscription's plan.
+   *
+   * Requires the product key to be set on PpusshClient construction.
+   *
+   * @param userId        UUID string of the Accounts user.
+   * @param featureCode   Feature code defined on the plan, e.g. "premium_nodes".
+   * @param workspaceId   Optional workspace UUID — required for workspace-scoped billing.
+   *
+   * @example
+   * const access = await ppussh.payments.checkAccess(user.id, "premium_nodes");
+   * if (!access.hasAccess) throw new Error("Upgrade required");
+   */
+  async checkAccess(
+    userId: string,
+    featureCode: string,
+    workspaceId?: string,
+  ): Promise<AccessResult> {
+    this._requireProductKey("checkAccess");
+    const response = await this._http.request(
+      "POST",
+      "/access/check",
+      {
+        json: {
+          user_id: userId,
+          feature_code: featureCode,
+          workspace_id: workspaceId ?? null,
+        },
+        headers: { "X-Product-Key": this._productKey! },
+        isPayments: true,
+      },
+    );
+    return response.data as AccessResult;
+  }
+
+  // ── Analytics (admin) ─────────────────────────────────────────────────────
 
   /**
    * Fetch Monthly Recurring Revenue breakdown.
    *
-   * Requires `paymentsAdminKey`.
+   * Requires admin key.
    *
    * @param productId   Filter to a specific product UUID (optional).
    * @param startDate   ISO date string e.g. "2025-01-01" (optional).
@@ -262,14 +339,14 @@ export class PaymentsNamespace {
     startDate?: string;
     endDate?: string;
   } = {}): Promise<MRRResponse> {
-    this._requireAdminKey("getMrr");
+    this._requireProductKey("getMrr");
     const params: Record<string, string | undefined> = {};
     if (options.productId) params["product_id"] = options.productId;
     if (options.startDate) params["start_date"] = options.startDate;
     if (options.endDate) params["end_date"] = options.endDate;
 
     const response = await this._http.request("GET", "/admin/analytics/mrr", {
-      headers: { "X-Admin-Key": this._adminKey! },
+      headers: { "X-Product-Key": this._productKey! },
       params,
       isPayments: true,
     });
@@ -295,11 +372,18 @@ export class PaymentsNamespace {
 
   // ── Internal helpers ───────────────────────────────────────────────────────
 
-  private _requireAdminKey(method: string): void {
-    if (!this._adminKey) {
+  private _getAuthHeaders(): Record<string, string> {
+    if (this._productKey) {
+      return { "X-Product-Key": this._productKey };
+    }
+    return {};
+  }
+
+  private _requireProductKey(method: string): void {
+    if (!this._productKey) {
       throw new Error(
-        `payments.${method}() requires a paymentsAdminKey. ` +
-          "Pass paymentsAdminKey: '...' to PpusshClient().",
+        `payments.${method}() requires a paymentsProductKey. ` +
+          "Pass paymentsProductKey: '...' to PpusshClient().",
       );
     }
   }

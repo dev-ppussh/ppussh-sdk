@@ -9,7 +9,7 @@ Quick start
     client = PpusshClient(
         client_id="your-client-id",
         client_secret="your-client-secret",
-        payments_admin_key="your-payments-admin-key",  # optional
+        payments_product_key="your-payments-product-key",  # optional
     )
 
     # Build the login redirect URL

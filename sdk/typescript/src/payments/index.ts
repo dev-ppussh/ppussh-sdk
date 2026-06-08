@@ -3,6 +3,7 @@ export type {
   CustomerCreateRequest,
   CustomerResponse,
   MRRByPlan,
+  AccessResult,
   MRRByProduct,
   MRRResponse,
   PaymentProductResponse,

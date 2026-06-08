@@ -55,12 +55,24 @@ class PlanResponse(BaseModel):
     currency: str                             # ISO 4217 e.g. "USD"
     billing_cycle: str                        # "monthly" | "yearly"
     status: str                               # "active" | "archived"
+    features: list[dict] | None = None       # e.g. [{"code": "premium_nodes", "name": "Premium AI Nodes", "limit": 500}]
     created_at: datetime
 
     def amount_display(self) -> str:
         """Human-readable amount, e.g. '$29.00'."""
         major = self.amount_cents / 100
         return f"{major:,.2f} {self.currency}"
+
+
+# ── Access check ──────────────────────────────────────────────────────────────
+
+class AccessResult(BaseModel):
+    """Response from ``POST /access/check``."""
+    model_config = _cfg
+
+    has_access: bool
+    feature_name: str | None = None
+    limit: int | bool | None = None
 
 
 # ── Subscriptions ──────────────────────────────────────────────────────────────
@@ -74,11 +86,12 @@ class SubscriptionResponse(BaseModel):
     plan_id: str                              # UUID string
     provider: str                             # "paddle" | "dodo"
     provider_subscription_ids: dict[str, str]
-    status: str                               # trialing|active|past_due|paused|cancelled|unpaid
+    status: str                               # trialing|active|past_due|paused|cancelled|unpaid|pending_payment
     current_period_start: datetime | None = None
     current_period_end: datetime | None = None
     cancelled_at: datetime | None = None
     trial_ends_at: datetime | None = None
+    checkout_url: str | None = None     # Hosted checkout page (only on create)
     created_at: datetime
     updated_at: datetime
 

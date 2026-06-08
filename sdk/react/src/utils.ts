@@ -1,4 +1,4 @@
-import Cookies from 'js-cookie';
+import Cookies from '../node_modules/@types/js-cookie';
 
 export const getAccessToken = (): string | undefined => {
   return Cookies.get('access_token') ?? Cookies.get('admin_access_token');

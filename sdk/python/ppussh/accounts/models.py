@@ -17,46 +17,6 @@ from pydantic import BaseModel, EmailStr, ConfigDict
 _cfg = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
-# ── Token exchange ─────────────────────────────────────────────────────────────
-
-class UserInToken(BaseModel):
-    """
-    Minimal user profile embedded inside a ``TokenResponse``.
-    Returned by ``POST /oauth/token`` — no extra round-trip needed.
-    """
-    model_config = _cfg
-
-    id: str                          # UUID string
-    email: str
-    name: str | None = None
-    email_verified: bool
-    picture_url: str | None = None
-    is_superuser: bool = False
-
-
-class TokenResponse(BaseModel):
-    """
-    Response from ``POST /oauth/token`` (both grant types).
-
-    Exactly one of ``access_token`` / ``admin_access_token`` is populated:
-    - Regular users → ``access_token`` is set, ``admin_access_token`` is None.
-    - Superusers    → ``admin_access_token`` is set, ``access_token`` is None.
-    """
-    model_config = _cfg
-
-    access_token: str | None = None
-    admin_access_token: str | None = None
-    refresh_token: str
-    token_type: str = "Bearer"
-    expires_in: int                  # seconds until access token expires
-    user: UserInToken
-
-    @property
-    def effective_access_token(self) -> str | None:
-        """Return whichever access token is present (regular or admin)."""
-        return self.access_token or self.admin_access_token
-
-
 # ── Token verification ─────────────────────────────────────────────────────────
 
 class VerifyTokenResult(BaseModel):
@@ -74,7 +34,8 @@ class VerifyTokenResult(BaseModel):
 class UserProfile(BaseModel):
     """
     Full user profile returned by ``GET /users/me``.
-    Richer than ``UserInToken`` — includes account status fields.
+    Richer than the embedded user in the token response — includes account
+    status fields.
     """
     model_config = _cfg
 
@@ -87,17 +48,6 @@ class UserProfile(BaseModel):
     is_verified: bool
     created_at: datetime
     updated_at: datetime | None = None
-
-
-# ── Logout ─────────────────────────────────────────────────────────────────────
-
-class LogoutResult(BaseModel):
-    """Response from ``POST /oauth/logout``."""
-    model_config = _cfg
-
-    ok: bool
-    sessions_revoked: int
-    products_notified: int
 
 
 # ── Entitlements ───────────────────────────────────────────────────────────────

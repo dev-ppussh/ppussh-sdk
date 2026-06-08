@@ -4,12 +4,9 @@ PaymentsNamespace — customer, subscription, and plan operations.
 
 Auth model
 ----------
-- Customer + subscription endpoints (POST /customers, POST /subscriptions, etc.)
-  are unauthenticated at the HTTP level — the Payments service validates the
-  owner_user_id against Accounts internally.
-- Admin endpoints (list_plans, get_mrr) require the payments ADMIN_API_KEY
-  sent as the ``X-Admin-Key`` header. This is set once at PpusshClient
-  construction time via ``payments_admin_key``.
+- All endpoints accept either X-Admin-Key or X-Product-Key header.
+- Product API key is scoped to a specific product.
+- Get the product key from the Payments section in the Accounts admin console.
 
 Idempotency
 -----------
@@ -25,6 +22,7 @@ from typing import Any
 
 from ppussh._http import HttpTransport
 from ppussh.payments.models import (
+    AccessResult,
     CustomerCreateRequest,
     CustomerResponse,
     MRRResponse,
@@ -50,10 +48,10 @@ class PaymentsNamespace:
         self,
         transport: HttpTransport,
         *,
-        admin_key: str | None = None,
+        product_key: str | None = None,
     ) -> None:
         self._http = transport
-        self._admin_key = admin_key
+        self._product_key = product_key
 
     # ── Customers ──────────────────────────────────────────────────────────────
 
@@ -101,6 +99,7 @@ class PaymentsNamespace:
             "POST",
             "/customers",
             json=body.model_dump(exclude_none=True),
+            headers=self._get_auth_headers(),
             is_payments=True,
         )
         customer = CustomerResponse.model_validate(response.json())
@@ -122,6 +121,7 @@ class PaymentsNamespace:
         response = await self._http.request(
             "GET",
             f"/customers/{customer_id}",
+            headers=self._get_auth_headers(),
             is_payments=True,
         )
         return CustomerResponse.model_validate(response.json())
@@ -185,6 +185,7 @@ class PaymentsNamespace:
             "POST",
             "/subscriptions",
             json=body.model_dump(exclude_none=True),
+            headers=self._get_auth_headers(),
             is_payments=True,
         )
         sub = SubscriptionResponse.model_validate(response.json())
@@ -228,6 +229,7 @@ class PaymentsNamespace:
             "GET",
             "/subscriptions",
             params=params,
+            headers=self._get_auth_headers(),
             is_payments=True,
         )
         return SubscriptionListResponse.model_validate(response.json())
@@ -243,6 +245,7 @@ class PaymentsNamespace:
         response = await self._http.request(
             "GET",
             f"/subscriptions/{subscription_id}",
+            headers=self._get_auth_headers(),
             is_payments=True,
         )
         return SubscriptionResponse.model_validate(response.json())
@@ -274,6 +277,7 @@ class PaymentsNamespace:
             "DELETE",
             f"/subscriptions/{subscription_id}",
             json=body.model_dump(),
+            headers=self._get_auth_headers(),
             is_payments=True,
         )
         return SubscriptionResponse.model_validate(response.json())
@@ -284,8 +288,8 @@ class PaymentsNamespace:
         """
         List all billing plans for a Payments product.
 
-        Requires the ``payments_admin_key`` set on PpusshClient construction.
-        Plans with status ``"archived"`` are included — filter client-side if needed.
+        Requires the ``payments_product_key`` set on PpusshClient construction.
+        The key must be authorized for the product.
 
         Parameters
         ----------
@@ -298,13 +302,13 @@ class PaymentsNamespace:
         Raises
         ------
         PpusshPaymentError   code="product_not_found" on 404.
-        ValueError           If no payments_admin_key was provided at construction.
+        ValueError           If no payments_product_key was provided at construction.
         """
-        self._require_admin_key("list_plans")
+        self._require_product_key("list_plans")
         response = await self._http.request(
             "GET",
-            f"/admin/products/{payment_product_id}/plans",
-            headers={"X-Admin-Key": self._admin_key},  # type: ignore[arg-type]
+            f"/products/{payment_product_id}/plans",
+            headers={"X-Product-Key": self._product_key},  # type: ignore[arg-type]
             is_payments=True,
         )
         return [PlanResponse.model_validate(p) for p in response.json()]
@@ -325,15 +329,15 @@ class PaymentsNamespace:
 
         Raises
         ------
-        ValueError  If no payments_admin_key was provided at construction.
+        ValueError  If no payments_product_key was provided at construction.
         """
-        self._require_admin_key("get_product_by_accounts_id")
+        self._require_product_key("get_product_by_accounts_id")
         from ppussh.errors import PpusshPaymentError
         try:
             response = await self._http.request(
                 "GET",
                 f"/admin/products/by-accounts-id/{accounts_product_id}",
-                headers={"X-Admin-Key": self._admin_key},  # type: ignore[arg-type]
+                headers={"X-Product-Key": self._product_key},  # type: ignore[arg-type]
                 is_payments=True,
             )
         except PpusshPaymentError as exc:
@@ -354,7 +358,7 @@ class PaymentsNamespace:
         """
         Fetch Monthly Recurring Revenue breakdown.
 
-        Requires ``payments_admin_key``.
+        Requires ``payments_product_key``.
 
         Parameters
         ----------
@@ -366,7 +370,7 @@ class PaymentsNamespace:
         -------
         MRRResponse  with total_mrr_cents, by_product, and by_plan breakdowns.
         """
-        self._require_admin_key("get_mrr")
+        self._require_product_key("get_mrr")
         params: dict[str, Any] = {}
         if product_id:
             params["product_id"] = product_id
@@ -378,7 +382,7 @@ class PaymentsNamespace:
         response = await self._http.request(
             "GET",
             "/admin/analytics/mrr",
-            headers={"X-Admin-Key": self._admin_key},  # type: ignore[arg-type]
+            headers={"X-Product-Key": self._product_key},  # type: ignore[arg-type]
             params=params,
             is_payments=True,
         )
@@ -414,11 +418,68 @@ class PaymentsNamespace:
             "Track progress in payments/readme.md."
         )
 
+    # ── Access check ────────────────────────────────────────────────────────────
+
+    async def check_access(
+        self,
+        user_id: str,
+        feature_code: str,
+        *,
+        workspace_id: str | None = None,
+    ) -> AccessResult:
+        """
+        Check whether a user has access to a specific feature based on their
+        active subscription's plan.
+
+        The caller must be authenticated with a valid ``payments_product_key``
+        that matches the product whose access is being checked.
+
+        Parameters
+        ----------
+        user_id:       UUID string of the Accounts user.
+        feature_code:  Feature code defined on the plan, e.g. ``"premium_nodes"``.
+        workspace_id:  Optional workspace UUID — required for workspace-scoped billing.
+
+        Returns
+        -------
+        AccessResult with ``has_access``, ``feature_name``, and ``limit``.
+
+        Example
+        -------
+        .. code-block:: python
+
+            access = await ppussh.payments.check_access(
+                user_id=user.id,
+                feature_code="premium_nodes",
+            )
+            if not access.has_access:
+                raise HTTPException(403, f"Upgrade required for {access.feature_name}")
+        """
+        self._require_product_key("check_access")
+        body = {
+            "user_id": user_id,
+            "feature_code": feature_code,
+            "workspace_id": workspace_id,
+        }
+        response = await self._http.request(
+            "POST",
+            "/access/check",
+            json=body,
+            headers={"X-Product-Key": self._product_key},  # type: ignore[arg-type]
+            is_payments=True,
+        )
+        return AccessResult.model_validate(response.json())
+
     # ── Internal helpers ───────────────────────────────────────────────────────
 
-    def _require_admin_key(self, method: str) -> None:
-        if not self._admin_key:
+    def _get_auth_headers(self) -> dict[str, str]:
+        if self._product_key:
+            return {"X-Product-Key": self._product_key}
+        return {}
+
+    def _require_product_key(self, method: str) -> None:
+        if not self._product_key:
             raise ValueError(
-                f"payments.{method}() requires a payments_admin_key. "
-                "Pass payments_admin_key='...' to PpusshClient()."
+                f"payments.{method}() requires a payments_product_key. "
+                "Pass payments_product_key='...' to PpusshClient()."
             )

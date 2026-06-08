@@ -9,20 +9,17 @@
  *   const client = new PpusshClient({
  *     clientId: "your-client-id",
  *     clientSecret: "your-client-secret",
- *     paymentsAdminKey: "your-payments-admin-key", // optional
+ *     paymentsProductKey: "your-payments-product-key", // optional
  *   });
  *
  *   // Build the login redirect URL
  *   const loginUrl = client.accounts.buildLoginUrl(redirectUri, state);
  *
- *   // OIDC callback
- *   const token = await client.accounts.exchangeCode(code, redirectUri);
- *
  *   // Middleware token check
  *   const result = await client.accounts.verifyToken(bearer);
  *
  *   // Billing
- *   const customer = await client.payments.createCustomer(token.user.id);
+ *   const customer = await client.payments.createCustomer(userId);
  *
  * All errors are subclasses of PpusshError:
  *
@@ -54,17 +51,14 @@ export {
 // ── Accounts types ────────────────────────────────────────────────────────────
 export type {
   EntitlementResponse,
-  LogoutResult,
   SessionResponse,
-  TokenResponse,
-  UserInToken,
   UserProfile,
   VerifyTokenResult,
 } from "./accounts/types";
-export { effectiveAccessToken } from "./accounts/types";
 
 // ── Payments types ────────────────────────────────────────────────────────────
 export type {
+  AccessResult,
   CustomerCreateRequest,
   CustomerResponse,
   MRRByPlan,

@@ -23,14 +23,8 @@ Minimal — just client_id + client_secret:
     client = PpusshClient(
         client_id="your-product-client-id",
         client_secret="your-product-client-secret",
-        payments_admin_key="your-payments-admin-key",  # optional; needed for admin calls
+        payments_product_key="your-payments-product-key",  # optional; needed for plans
     )
-
-    # OIDC callback handler (e.g. FastAPI route)
-    @app.get("/auth/callback")
-    async def callback(code: str, state: str):
-        token = await client.accounts.exchange_code(code, redirect_uri=REDIRECT_URI)
-        return {"user_id": token.user.id}
 
     # Token verification middleware
     async def verify_request(bearer_token: str):
@@ -38,18 +32,11 @@ Minimal — just client_id + client_secret:
         return result.user_id
 
     # Billing
-    customer = await client.payments.create_customer(owner_user_id=token.user.id)
-    sub = await client.payments.create_subscription(
-        customer_id=customer.id,
-        payment_product_id="...",
-        plan_key="pro",
-        idempotency_key=str(uuid4()),
-    )
+    customer = await client.payments.create_customer(owner_user_id="...")
 
-Async context manager (recommended for scripts / one-off usage):
-
-    async with PpusshClient(...) as client:
-        token = await client.accounts.exchange_code(code, redirect_uri=REDIRECT_URI)
+The product backend handles the OIDC callback, token exchange, refresh, logout,
+and cookie management itself — the SDK provides only the server-side helpers
+that are inconvenient to call via raw HTTP.
 
 For long-lived services (FastAPI app lifespan, etc.), call ``await client.aclose()``
 on shutdown instead.
@@ -94,8 +81,8 @@ class PpusshClient:
     Unified PPUSSH SDK client.
 
     Exposes two namespaces:
-      ``client.accounts``  — OIDC token exchange, token verification, user profile
-      ``client.payments``  — customers, subscriptions, plans
+      ``client.accounts``  — token verification, user profile, session management
+      ``client.payments``  — customers, subscriptions, plans, access checks
 
     Parameters
     ----------
@@ -105,11 +92,10 @@ class PpusshClient:
     client_secret:
         Your product's ``client_secret`` (from the Accounts admin console).
         **Never expose this in browser-side code.** Server-side only.
-    payments_admin_key:
-        Static admin API key for the Payments service. Required for
-        ``payments.list_plans()``, ``payments.get_mrr()``, and
-        ``payments.get_product_by_accounts_id()``. Optional if you only use
-        customer and subscription endpoints.
+    payments_product_key:
+        Product API key for Payments service. Used for customer and
+        subscription operations. Get this from the Payments section
+        in the Accounts admin console.
     accounts_url:
         Accounts service base URL. Falls back to the ``PPUSSH_ACCOUNTS_URL``
         environment variable. **Required** — one of the two must be set.
@@ -123,7 +109,7 @@ class PpusshClient:
         client_id: str,
         client_secret: str,
         *,
-        payments_admin_key: str | None = None,
+        payments_product_key: str | None = None,
         accounts_url: str | None = None,
         accounts_frontend_url: str | None = None,
         payments_url: str | None = None,
@@ -150,7 +136,7 @@ class PpusshClient:
         )
         self.payments = PaymentsNamespace(
             self._payments_transport,
-            admin_key=payments_admin_key,
+            product_key=payments_product_key,
         )
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────

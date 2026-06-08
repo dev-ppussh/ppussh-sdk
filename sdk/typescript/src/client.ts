@@ -19,14 +19,11 @@
  *     paymentsAdminKey: "your-payments-admin-key", // optional
  *   });
  *
- *   // OIDC callback handler (e.g. Express / Fastify route)
- *   const token = await client.accounts.exchangeCode(code, redirectUri);
- *
  *   // Token verification middleware
  *   const result = await client.accounts.verifyToken(bearerToken);
  *
  *   // Billing
- *   const customer = await client.payments.createCustomer(token.user.id);
+ *   const customer = await client.payments.createCustomer(userId);
  */
 
 import { AccountsNamespace } from "./accounts/namespace";
@@ -55,10 +52,11 @@ export interface PpusshClientOptions {
   /** Your product's client_secret. Server-side only — never expose in browser code. */
   clientSecret: string;
   /**
-   * Static admin API key for the Payments service.
-   * Required for payments.listPlans(), getMrr(), getProductByAccountsId().
+   * Product API key for Payments service.
+   * Used for customer and subscription operations.
+   * Get this from the Payments section in the Accounts admin console.
    */
-  paymentsAdminKey?: string;
+  paymentsProductKey?: string;
   /**
    * Accounts service base URL. Falls back to the PPUSSH_ACCOUNTS_URL env var.
    * Required — one of the two must be set.
@@ -104,7 +102,7 @@ export class PpusshClient {
     });
 
     this.payments = new PaymentsNamespace(this._paymentsTransport, {
-      adminKey: options.paymentsAdminKey,
+      productKey: options.paymentsProductKey,
     });
   }
 
