@@ -125,6 +125,7 @@ class SubscriptionCreateRequest(BaseModel):
     idempotency_key: str                      # caller-supplied, unique per attempt
     provider: str | None = None              # "paddle" | "dodo" | None (use plan default)
     metadata: dict[str, Any] | None = None
+    return_url: str | None = None           # hosted checkout: redirect here after payment
 
 
 class SubscriptionCancelRequest(BaseModel):

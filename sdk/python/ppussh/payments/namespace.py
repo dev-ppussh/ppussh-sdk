@@ -137,6 +137,7 @@ class PaymentsNamespace:
         idempotency_key: str,
         provider: str | None = None,
         metadata: dict[str, Any] | None = None,
+        return_url: str | None = None,
     ) -> SubscriptionResponse:
         """
         Create a subscription for a customer on a billing plan.
@@ -180,6 +181,7 @@ class PaymentsNamespace:
             idempotency_key=idempotency_key,
             provider=provider,
             metadata=metadata,
+            return_url=return_url,
         )
         response = await self._http.request(
             "POST",
