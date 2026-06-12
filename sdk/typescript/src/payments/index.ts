@@ -1,11 +1,14 @@
 // ppussh/src/payments/index.ts
 export type {
+  AccessResult,
+  CheckoutSessionRequest,
+  CheckoutSessionResponse,
   CustomerCreateRequest,
   CustomerResponse,
   MRRByPlan,
-  AccessResult,
   MRRByProduct,
   MRRResponse,
+  PaddleConfigResponse,
   PaymentProductResponse,
   PlanResponse,
   SubscriptionCancelRequest,

@@ -23,9 +23,11 @@ from typing import Any
 from ppussh._http import HttpTransport
 from ppussh.payments.models import (
     AccessResult,
+    CheckoutSessionResponse,
     CustomerCreateRequest,
     CustomerResponse,
     MRRResponse,
+    PaddleConfigResponse,
     PaymentProductResponse,
     PlanResponse,
     SubscriptionCancelRequest,
@@ -419,6 +421,80 @@ class PaymentsNamespace:
             "The Payments backend endpoint has not been implemented. "
             "Track progress in payments/readme.md."
         )
+
+    # ── Checkout session ──────────────────────────────────────────────────────────
+
+    async def create_checkout_session(
+        self,
+        user_id: str,
+        plan_id: str,
+        return_url: str,
+        idempotency_key: str,
+        *,
+        billing_email: str | None = None,
+    ) -> CheckoutSessionResponse:
+        """
+        Create a checkout session that returns a portal URL for the centralized
+        checkout portal SPA.
+
+        The Payments service:
+        1. Resolves or creates a Customer for the given ``user_id``.
+        2. Verifies the user's Accounts entitlement for the plan's product.
+        3. Creates a draft transaction at the provider (Paddle / Dodo).
+        4. Returns a portal URL pointing to the checkout portal SPA.
+
+        Parameters
+        ----------
+        user_id:           UUID string of the Accounts user.
+        plan_id:           UUID string of the Payments Plan.
+        return_url:        URL where the portal redirects after checkout completes.
+        idempotency_key:   Unique string per checkout attempt (use UUID v4).
+        billing_email:     Optional billing email — if not set, fetched from Accounts.
+
+        Returns
+        -------
+        CheckoutSessionResponse with ``checkout_url`` (portal SPA URL).
+
+        Raises
+        ------
+        PpusshPaymentError  Various codes — ``accounts_user_not_found``,
+                            ``plan_not_found``, ``entitlement_required``, etc.
+        PpusshNetworkError  If all retries are exhausted.
+        """
+        self._require_product_key("create_checkout_session")
+        body: dict[str, str | None] = {
+            "user_id": user_id,
+            "plan_id": plan_id,
+            "return_url": return_url,
+            "idempotency_key": idempotency_key,
+        }
+        if billing_email is not None:
+            body["billing_email"] = billing_email
+        response = await self._http.request(
+            "POST",
+            "/subscriptions/checkout-session",
+            json=body,
+            headers={"X-Product-Key": self._product_key},  # type: ignore[arg-type]
+            is_payments=True,
+        )
+        return CheckoutSessionResponse.model_validate(response.json())
+
+    async def get_paddle_config(self) -> PaddleConfigResponse:
+        """
+        Get the Paddle client token and environment for the checkout portal.
+
+        This endpoint is public — no product key required.
+
+        Returns
+        -------
+        PaddleConfigResponse with ``client_token`` and ``environment``.
+        """
+        response = await self._http.request(
+            "GET",
+            "/subscriptions/paddle-config",
+            is_payments=True,
+        )
+        return PaddleConfigResponse.model_validate(response.json())
 
     # ── Access check ────────────────────────────────────────────────────────────
 

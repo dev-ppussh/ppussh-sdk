@@ -159,3 +159,25 @@ export interface AccessResult {
   featureName: string | null;
   limit: number | boolean | null;
 }
+
+// ── Checkout session ─────────────────────────────────────────────────────────
+
+/** Request body for POST /subscriptions/checkout-session. */
+export interface CheckoutSessionRequest {
+  user_id: string;
+  plan_id: string;
+  return_url: string;
+  idempotency_key: string;
+  billing_email?: string | null;
+}
+
+/** Response from POST /subscriptions/checkout-session. */
+export interface CheckoutSessionResponse {
+  checkout_url: string;
+}
+
+/** Response from GET /subscriptions/paddle-config. */
+export interface PaddleConfigResponse {
+  client_token: string;
+  environment: string;
+}

@@ -59,11 +59,14 @@ export type {
 // ── Payments types ────────────────────────────────────────────────────────────
 export type {
   AccessResult,
+  CheckoutSessionRequest,
+  CheckoutSessionResponse,
   CustomerCreateRequest,
   CustomerResponse,
   MRRByPlan,
   MRRByProduct,
   MRRResponse,
+  PaddleConfigResponse,
   PaymentProductResponse,
   PlanResponse,
   SubscriptionCancelRequest,

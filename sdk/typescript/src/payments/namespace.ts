@@ -17,9 +17,11 @@ import { PpusshPaymentError } from "../errors";
 import { HttpTransport } from "../http";
 import {
   AccessResult,
+  CheckoutSessionResponse,
   CustomerCreateRequest,
   CustomerResponse,
   MRRResponse,
+  PaddleConfigResponse,
   PaymentProductResponse,
   PlanResponse,
   SubscriptionListResponse,
@@ -321,6 +323,66 @@ const response = await this._http.request("POST", "/subscriptions", {
       },
     );
     return response.data as AccessResult;
+  }
+
+  // ── Checkout session ──────────────────────────────────────────────────────
+
+  /**
+   * Create a checkout session that returns a portal URL for the centralized
+   * checkout portal SPA.
+   *
+   * Requires the product key to be set on PpusshClient construction.
+   *
+   * @param options.userId           UUID string of the Accounts user.
+   * @param options.planId           UUID string of the Payments Plan.
+   * @param options.returnUrl        URL where the portal redirects after checkout completes.
+   * @param options.idempotencyKey   Unique string per checkout attempt (use UUID v4).
+   * @param options.billingEmail     Optional billing email — falls back to Accounts user email.
+   * @throws PpusshPaymentError  Various codes — accounts_user_not_found,
+   *   plan_not_found, entitlement_required, provider_error, etc.
+   * @throws Error               If no productKey was provided at construction.
+   */
+  async createCheckoutSession(options: {
+    userId: string;
+    planId: string;
+    returnUrl: string;
+    idempotencyKey: string;
+    billingEmail?: string | null;
+  }): Promise<CheckoutSessionResponse> {
+    this._requireProductKey("createCheckoutSession");
+    const body: Record<string, string | null> = {
+      user_id: options.userId,
+      plan_id: options.planId,
+      return_url: options.returnUrl,
+      idempotency_key: options.idempotencyKey,
+    };
+    if (options.billingEmail != null) {
+      body.billing_email = options.billingEmail;
+    }
+    const response = await this._http.request(
+      "POST",
+      "/subscriptions/checkout-session",
+      {
+        json: body,
+        headers: { "X-Product-Key": this._productKey! },
+        isPayments: true,
+      },
+    );
+    return response.data as CheckoutSessionResponse;
+  }
+
+  /**
+   * Get the Paddle client token and environment for the checkout portal.
+   *
+   * This endpoint is public — no product key required.
+   */
+  async getPaddleConfig(): Promise<PaddleConfigResponse> {
+    const response = await this._http.request(
+      "GET",
+      "/subscriptions/paddle-config",
+      { isPayments: true },
+    );
+    return response.data as PaddleConfigResponse;
   }
 
   // ── Analytics (admin) ─────────────────────────────────────────────────────

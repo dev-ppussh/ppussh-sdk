@@ -176,3 +176,30 @@ class MRRResponse(BaseModel):
     currency: str
     by_product: list[MRRByProduct]
     by_plan: list[MRRByPlan]
+
+
+# ── Checkout session ──────────────────────────────────────────────────────────
+
+class CheckoutSessionRequest(BaseModel):
+    """Request body for ``POST /subscriptions/checkout-session``."""
+    model_config = _cfg
+
+    user_id: str                           # UUID string — Accounts user ID
+    plan_id: str                           # UUID string — Payments Plan ID
+    return_url: str                        # Portal redirects here after checkout
+    idempotency_key: str                   # Unique per attempt (UUID v4)
+
+
+class CheckoutSessionResponse(BaseModel):
+    """Response from ``POST /subscriptions/checkout-session``."""
+    model_config = _cfg
+
+    checkout_url: str                      # Portal SPA URL with txn + return_url
+
+
+class PaddleConfigResponse(BaseModel):
+    """Response from ``GET /subscriptions/paddle-config``."""
+    model_config = _cfg
+
+    client_token: str                      # Paddle client-side token
+    environment: str                       # "sandbox" | "production"
