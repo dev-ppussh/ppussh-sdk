@@ -1,43 +1,34 @@
 # ppussh/accounts/namespace.py
 """
-AccountsNamespace — stateless helpers for Accounts service API calls.
+AccountsNamespace — product-side helpers for the Accounts service.
 
-The product backend handles the OIDC flow (login, callback, token exchange)
-and cookie management itself. This namespace provides lightweight wrappers
-for the few server-side calls the product backend needs:
+The product backend owns the full OIDC lifecycle (login redirect, callback,
+token handling, refresh, logout, cookie management). This namespace provides
+the two server-side calls the product backend needs from the SDK:
 
-  build_login_url()  → build the redirect URL to send the user to Accounts
-  verify_token()     → validate an incoming access token (from request cookies)
-  get_user()         → fetch the full user profile
-  get_entitlements() → list products the user has granted consent to
-  get_sessions()     → list active sessions for the authenticated user
-  revoke_session()   → revoke a single session by ID
+  build_login_url()  → build the redirect URL to send the user to Accounts login
+  exchange_code()    → exchange an OAuth authorization ``code`` for a token
+                       (the SDK POSTs to the Accounts ``/oauth/token`` endpoint
+                       with the product's client_id + client_secret)
 
-No tokens are stored internally — every method requiring authentication expects
-an explicit ``access_token`` parameter.
+The SDK never forwards end-user tokens. Profile/session/entitlement lookups
+are intentionally out of scope — the product reads those from its own cookies
+or calls the Accounts API directly with its own credentials.
 """
 from __future__ import annotations
 
-import logging
 from urllib.parse import urlencode
 
 from ppussh._http import HttpTransport
-from ppussh.accounts.models import (
-    EntitlementResponse,
-    SessionResponse,
-    UserProfile,
-    VerifyTokenResult,
-)
-
-logger = logging.getLogger(__name__)
+from ppussh.accounts.models import TokenResponse
 
 
 class AccountsNamespace:
     """
     Access via ``client.accounts``.
 
-    All async methods are coroutines — use ``await``.
-    ``build_login_url()`` is synchronous.
+    Both methods are coroutines except ``build_login_url()``, which is
+    synchronous.
     """
 
     def __init__(
@@ -46,13 +37,11 @@ class AccountsNamespace:
         *,
         client_id: str,
         client_secret: str,
-        accounts_url: str,
-        accounts_frontend_url
+        accounts_frontend_url: str,
     ) -> None:
         self._http = transport
         self._client_id = client_id
         self._client_secret = client_secret
-        self._accounts_url = accounts_url
         self._accounts_frontend_url = accounts_frontend_url
 
     # ── Login URL builder ──────────────────────────────────────────────────────
@@ -100,140 +89,61 @@ class AccountsNamespace:
             params["next"] = next_url
         return f"{self._accounts_frontend_url}/login?{urlencode(params)}"
 
-    # ── Token verification ─────────────────────────────────────────────────────
+    # ── OAuth token exchange ───────────────────────────────────────────────────
 
-    async def verify_token(self, access_token: str) -> VerifyTokenResult:
+    async def exchange_code(
+        self,
+        code: str,
+        redirect_uri: str,
+        *,
+        state: str | None = None,
+        next_url: str | None = None,
+    ) -> TokenResponse:
         """
-        Validate an access token your server received from an end-user request.
+        Exchange an authorization ``code`` for a token (OAuth ``authorization_code`` grant).
 
-        Use this in your middleware / request handler to verify that the Bearer
-        token a user sent to your product's API is valid and not expired.
-
-        This performs a full server-side validation including:
-        - JWT signature check
-        - Expiry check
-        - token_version check (catches tokens invalidated by password reset)
-        - Account status check (deleted / unverified accounts are rejected)
+        Call this from your OIDC callback route. The SDK authenticates **as the
+        product** using the ``client_id`` / ``client_secret`` supplied to
+        ``PpusshClient`` and POSTs to the Accounts ``/oauth/token`` endpoint.
 
         Parameters
         ----------
-        access_token:
-            The raw JWT string from the user's ``Authorization: Bearer ...`` header.
+        code:
+            The ``code`` query parameter Accounts redirected back with.
+        redirect_uri:
+            Must exactly match the ``redirect_uri`` used in ``build_login_url()``.
+        state:
+            Optional; echoed back from the callback for CSRF validation.
+        next_url:
+            Optional; forwarded so Accounts can resume the right post-login target.
 
         Returns
         -------
-        VerifyTokenResult
-            ``{ valid: True, type: "access"|"admin_access", user_id: "...", email: "..." }``
+        TokenResponse
+            ``{ access_token, token_type, expires_in, refresh_token, user }``.
+            Set ``user.id`` / ``access_token`` as your own session cookie —
+            the SDK does not store or forward the token.
 
         Raises
         ------
-        PpusshAuthError    If the token is invalid, expired, or the account is deleted.
+        PpusshAuthError    If the code is invalid/expired or credentials are wrong.
         PpusshNetworkError If the request fails after all retries.
         """
+        data = {
+            "grant_type": "authorization_code",
+            "client_id": self._client_id,
+            "client_secret": self._client_secret,
+            "code": code,
+            "redirect_uri": redirect_uri,
+        }
+        if state is not None:
+            data["state"] = state
+        if next_url is not None:
+            data["next_url"] = next_url
+
         response = await self._http.request(
-            "GET",
-            "/auth/verify-token",
-            headers={"Authorization": f"Bearer {access_token}"},
+            "POST",
+            "/oauth/token",
+            data=data,
         )
-        return VerifyTokenResult.model_validate(response.json())
-
-    # ── User profile ───────────────────────────────────────────────────────────
-
-    async def get_user(self, access_token: str) -> UserProfile:
-        """
-        Fetch the full user profile for an access token.
-
-        Parameters
-        ----------
-        access_token:
-            JWT access token from the user's request cookie.
-
-        Returns
-        -------
-        UserProfile
-            Full profile including is_superuser, is_active, is_verified,
-            created_at, and updated_at.
-
-        Raises
-        ------
-        PpusshAuthError    If the token is invalid or expired.
-        PpusshNetworkError If the request fails after all retries.
-        """
-        response = await self._http.request(
-            "GET",
-            "/users/me",
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        return UserProfile.model_validate(response.json())
-
-    # ── Entitlements & sessions ────────────────────────────────────────────────
-
-    async def get_entitlements(
-        self,
-        access_token: str,
-    ) -> list[EntitlementResponse]:
-        """
-        List products the user has granted consent to (i.e. their entitlements).
-
-        Parameters
-        ----------
-        access_token:
-            JWT access token from the user's request cookie.
-        """
-        response = await self._http.request(
-            "GET",
-            "/users/me/entitlements",
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        return [EntitlementResponse.model_validate(e) for e in response.json()]
-
-    async def get_sessions(
-        self,
-        access_token: str,
-    ) -> list[SessionResponse]:
-        """
-        List all active sessions for the authenticated user.
-
-        Parameters
-        ----------
-        access_token:
-            JWT access token from the user's request cookie.
-        """
-        response = await self._http.request(
-            "GET",
-            "/users/me/sessions",
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        return [SessionResponse.model_validate(s) for s in response.json()]
-
-    async def revoke_session(
-        self,
-        session_id: str,
-        access_token: str,
-    ) -> None:
-        """
-        Revoke a specific session by its ID.
-
-        Uses ``DELETE /auth/sessions/{session_id}`` — the user can only revoke
-        their own sessions.  Useful for "sign out of this device" UX in a
-        session management screen.
-
-        Parameters
-        ----------
-        session_id:
-            The UUID of the session to revoke (from ``get_sessions()``).
-        access_token:
-            JWT access token from the user's request cookie.
-
-        Raises
-        ------
-        PpusshAuthError    If the token is invalid or the session does not belong
-                           to the authenticated user.
-        PpusshNetworkError If the request fails after all retries.
-        """
-        await self._http.request(
-            "DELETE",
-            f"/auth/sessions/{session_id}",
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        logger.debug("ppussh: session %s revoked", session_id)
+        return TokenResponse.model_validate(response.json())

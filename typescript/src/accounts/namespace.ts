@@ -1,45 +1,35 @@
 // ppussh/src/accounts/namespace.ts
 /**
- * AccountsNamespace — stateless helpers for Accounts service API calls.
+ * AccountsNamespace — product-side helpers for the Accounts service.
  *
- * The product backend handles the OIDC flow (login, callback, token exchange)
- * and cookie management itself. This namespace provides lightweight wrappers
- * for the few server-side calls the product backend needs:
+ * The product backend owns the full OIDC lifecycle (login redirect, callback,
+ * token handling, refresh, logout, cookie management). This namespace provides
+ * the two server-side calls the product backend needs from the SDK:
  *
- *   buildLoginUrl()   → build the redirect URL to send the user to Accounts
- *   verifyToken()     → validate an incoming access token (from request cookies)
- *   getUser()         → fetch the full user profile
- *   getEntitlements() → list products the user has granted consent to
- *   getSessions()     → list active sessions for the authenticated user
- *   revokeSession()   → revoke a single session by ID
+ *   buildLoginUrl()   → build the redirect URL to send the user to Accounts login
+ *   exchangeCode()    → exchange an OAuth authorization code for a token
  *
- * No tokens are stored internally — every method requiring authentication
- * expects an explicit ``accessToken`` parameter.
+ * The SDK never forwards end-user tokens. Profile/session/entitlement lookups
+ * are intentionally out of scope — the product reads those from its own cookies
+ * or calls the Accounts API directly with its own credentials.
  */
 
 import { HttpTransport } from "../http";
-import {
-  EntitlementResponse,
-  SessionResponse,
-  UserProfile,
-  VerifyTokenResult,
-} from "./types";
+import { TokenResponse } from "./types";
 
 export class AccountsNamespace {
   private readonly _http: HttpTransport;
   private readonly _clientId: string;
   private readonly _clientSecret: string;
-  private readonly _accountsUrl: string;
   private readonly _accountsFrontendUrl: string;
 
   constructor(
     transport: HttpTransport,
-    options: { clientId: string; clientSecret: string; accountsUrl: string; accountsFrontendUrl: string },
+    options: { clientId: string; clientSecret: string; accountsFrontendUrl: string },
   ) {
     this._http = transport;
     this._clientId = options.clientId;
     this._clientSecret = options.clientSecret;
-    this._accountsUrl = options.accountsUrl;
     this._accountsFrontendUrl = options.accountsFrontendUrl;
   }
 
@@ -61,43 +51,41 @@ export class AccountsNamespace {
     return `${this._accountsFrontendUrl}/login?${params.toString()}`;
   }
 
-  // ── Token verification ─────────────────────────────────────────────────────
+  // ── OAuth token exchange ───────────────────────────────────────────────────
 
-  async verifyToken(accessToken: string): Promise<VerifyTokenResult> {
-    const response = await this._http.request("GET", "/auth/verify-token", {
-      headers: { Authorization: `Bearer ${accessToken}` },
+  /**
+   * Exchange an authorization code for a token (OAuth authorization_code grant).
+   *
+   * Call this from your OIDC callback route. The SDK authenticates **as the
+   * product** using the clientId / clientSecret supplied to PpusshClient and
+   * POSTs to the Accounts /oauth/token endpoint.
+   *
+   * @param code         The `code` query parameter Accounts redirected back with.
+   * @param redirectUri  Must exactly match the redirectUri used in buildLoginUrl().
+   * @param opts.state   Optional; echoed back from the callback for CSRF validation.
+   * @param opts.nextUrl Optional; forwarded so Accounts can resume the post-login target.
+   * @returns TokenResponse — set token.user.id / token.access_token as your own
+   *   session cookie. The SDK does not store or forward the token.
+   * @throws PpusshAuthError  If the code is invalid/expired or credentials are wrong.
+   */
+  async exchangeCode(
+    code: string,
+    redirectUri: string,
+    opts?: { state?: string; nextUrl?: string },
+  ): Promise<TokenResponse> {
+    const body: Record<string, string> = {
+      grant_type: "authorization_code",
+      client_id: this._clientId,
+      client_secret: this._clientSecret,
+      code,
+      redirect_uri: redirectUri,
+    };
+    if (opts?.state != null) body["state"] = opts.state;
+    if (opts?.nextUrl != null) body["next_url"] = opts.nextUrl;
+
+    const response = await this._http.request("POST", "/oauth/token", {
+      form: body,
     });
-    return response.data as VerifyTokenResult;
-  }
-
-  // ── User profile ───────────────────────────────────────────────────────────
-
-  async getUser(accessToken: string): Promise<UserProfile> {
-    const response = await this._http.request("GET", "/users/me", {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    return response.data as UserProfile;
-  }
-
-  // ── Entitlements & sessions ────────────────────────────────────────────────
-
-  async getEntitlements(accessToken: string): Promise<EntitlementResponse[]> {
-    const response = await this._http.request("GET", "/users/me/entitlements", {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    return response.data as EntitlementResponse[];
-  }
-
-  async getSessions(accessToken: string): Promise<SessionResponse[]> {
-    const response = await this._http.request("GET", "/users/me/sessions", {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    return response.data as SessionResponse[];
-  }
-
-  async revokeSession(sessionId: string, accessToken: string): Promise<void> {
-    await this._http.request("DELETE", `/auth/sessions/${sessionId}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
+    return response.data as TokenResponse;
   }
 }

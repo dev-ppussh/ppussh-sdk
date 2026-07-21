@@ -51,9 +51,11 @@ class PaymentsNamespace:
         transport: HttpTransport,
         *,
         product_key: str | None = None,
+        admin_key: str | None = None,
     ) -> None:
         self._http = transport
         self._product_key = product_key
+        self._admin_key = admin_key
 
     # ── Customers ──────────────────────────────────────────────────────────────
 
@@ -292,8 +294,8 @@ class PaymentsNamespace:
         """
         List all billing plans for a Payments product.
 
-        Requires the ``payments_product_key`` set on PpusshClient construction.
-        The key must be authorized for the product.
+        Uses ``payments_admin_key`` if configured (lists plans for any product);
+        otherwise falls back to ``payments_product_key`` (must match the product).
 
         Parameters
         ----------
@@ -306,13 +308,14 @@ class PaymentsNamespace:
         Raises
         ------
         PpusshPaymentError   code="product_not_found" on 404.
-        ValueError           If no payments_product_key was provided at construction.
+        ValueError           If neither ``payments_admin_key`` nor
+                             ``payments_product_key`` was provided.
         """
-        self._require_product_key("list_plans")
+        self._require_any_key("list_plans")
         response = await self._http.request(
             "GET",
             f"/products/{payment_product_id}/plans",
-            headers={"X-Product-Key": self._product_key},  # type: ignore[arg-type]
+            headers=self._get_auth_headers(),
             is_payments=True,
         )
         return [PlanResponse.model_validate(p) for p in response.json()]
@@ -327,21 +330,24 @@ class PaymentsNamespace:
         Returns None if the product has not yet been registered in Payments
         (HTTP 404 is treated as a non-exceptional "not registered yet" state).
 
+        Requires the ``payments_admin_key`` set on PpusshClient construction
+        (this is an admin-scoped endpoint).
+
         Parameters
         ----------
         accounts_product_id:  UUID string from the Accounts admin console.
 
         Raises
         ------
-        ValueError  If no payments_product_key was provided at construction.
+        ValueError  If no payments_admin_key was provided at construction.
         """
-        self._require_product_key("get_product_by_accounts_id")
+        self._require_admin_key("get_product_by_accounts_id")
         from ppussh.errors import PpusshPaymentError
         try:
             response = await self._http.request(
                 "GET",
                 f"/admin/products/by-accounts-id/{accounts_product_id}",
-                headers={"X-Product-Key": self._product_key},  # type: ignore[arg-type]
+                headers=self._admin_headers(),
                 is_payments=True,
             )
         except PpusshPaymentError as exc:
@@ -362,7 +368,7 @@ class PaymentsNamespace:
         """
         Fetch Monthly Recurring Revenue breakdown.
 
-        Requires ``payments_product_key``.
+        Requires ``payments_admin_key`` (this is an admin-scoped endpoint).
 
         Parameters
         ----------
@@ -374,7 +380,7 @@ class PaymentsNamespace:
         -------
         MRRResponse  with total_mrr_cents, by_product, and by_plan breakdowns.
         """
-        self._require_product_key("get_mrr")
+        self._require_admin_key("get_mrr")
         params: dict[str, Any] = {}
         if product_id:
             params["product_id"] = product_id
@@ -386,7 +392,7 @@ class PaymentsNamespace:
         response = await self._http.request(
             "GET",
             "/admin/analytics/mrr",
-            headers={"X-Product-Key": self._product_key},  # type: ignore[arg-type]
+            headers=self._admin_headers(),
             params=params,
             is_payments=True,
         )
@@ -553,11 +559,34 @@ class PaymentsNamespace:
     def _get_auth_headers(self) -> dict[str, str]:
         if self._product_key:
             return {"X-Product-Key": self._product_key}
+        if self._admin_key:
+            return {"X-Admin-Key": self._admin_key}
+        return {}
+
+    def _admin_headers(self) -> dict[str, str]:
+        if self._admin_key:
+            return {"X-Admin-Key": self._admin_key}
         return {}
 
     def _require_product_key(self, method: str) -> None:
         if not self._product_key:
             raise ValueError(
                 f"payments.{method}() requires a payments_product_key. "
-                "Pass payments_product_key='...' to PpusshClient()."
+                "Payments may be inactive for your product — pass "
+                "payments_product_key='...' to PpusshClient() to enable "
+                "plans, checkout, and access checks."
+            )
+
+    def _require_admin_key(self, method: str) -> None:
+        if not self._admin_key:
+            raise ValueError(
+                f"payments.{method}() requires a payments_admin_key. "
+                "Pass payments_admin_key='...' to PpusshClient()."
+            )
+
+    def _require_any_key(self, method: str) -> None:
+        if not self._admin_key and not self._product_key:
+            raise ValueError(
+                f"payments.{method}() requires either a payments_admin_key "
+                "or a payments_product_key. Pass one to PpusshClient()."
             )

@@ -18,10 +18,7 @@ Quick start
     # OIDC callback
     token = await client.accounts.exchange_code(code, redirect_uri=REDIRECT_URI)
 
-    # Middleware token check
-    result = await client.accounts.verify_token(bearer)
-
-    # Billing
+    # The product issues its own session cookies from token.user.id / token.access_token
     customer = await client.payments.create_customer(owner_user_id=token.user.id)
 
 All raised exceptions are subclasses of ``PpusshError`` — import them
@@ -63,4 +60,4 @@ __all__ = [
     "WebhookEventType",
 ]
 
-__version__ = "0.1.2"
+__version__ = "0.3.0"

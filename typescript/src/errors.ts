@@ -34,10 +34,9 @@ export class PpusshError extends Error {
  * Raised on 401 responses from any PPUSSH endpoint.
  *
  * Common causes:
- * - Invalid or expired access token passed to verifyToken()
- * - Bad client_secret during exchangeCode() / refresh() / logout()
+ * - Bad client_id / client_secret during exchangeCode()
  * - Authorization code already used or expired
- * - Refresh token replayed (all sessions are revoked server-side)
+ * - Invalid or expired product/admin API key
  */
 export class PpusshAuthError extends PpusshError {
   constructor(

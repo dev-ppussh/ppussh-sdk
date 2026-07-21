@@ -45,10 +45,9 @@ class PpusshAuthError(PpusshError):
     Raised on 401 responses from any PPUSSH endpoint.
 
     Common causes:
-    - Invalid or expired access token passed to verify_token()
-    - Bad client_secret during exchange_code() / refresh() / logout()
+    - Bad client_id / client_secret during exchange_code()
     - Authorization code already used or expired
-    - Refresh token replayed (all sessions are revoked server-side in this case)
+    - Invalid or expired product/admin API key
     """
 
 

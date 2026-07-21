@@ -2,12 +2,9 @@
 /**
  * PpusshClient — the unified entry point for the PPUSSH Ecosystem TypeScript SDK.
  *
- * URL resolution order (highest → lowest priority):
- *   1. Explicit constructor option (accountsUrl, paymentsUrl)
- *   2. Environment variable (PPUSSH_ACCOUNTS_URL, PPUSSH_PAYMENTS_URL)
- *
- * Both URLs are **required** — an Error is thrown at construction time if
- * neither a constructor option nor an env var is present for a given service.
+ * The gateway is the single API entry point.  Pass `gatewayUrl` and the SDK
+ * routes accounts requests to the gateway root and payments requests to
+ * `gatewayUrl + "/payments"`.
  *
  * Usage — minimal:
  *
@@ -16,14 +13,14 @@
  *   const client = new PpusshClient({
  *     clientId: "your-product-client-id",
  *     clientSecret: "your-product-client-secret",
- *     paymentsAdminKey: "your-payments-admin-key", // optional
+ *     gatewayUrl: "https://api.example.com",
+ *     accountsFrontendUrl: "https://accounts.example.com",
+ *     paymentsProductKey: "your-payments-product-key", // optional
  *   });
  *
- *   // Token verification middleware
- *   const result = await client.accounts.verifyToken(bearerToken);
- *
- *   // Billing
- *   const customer = await client.payments.createCustomer(userId);
+ *   // OIDC callback — the product issues its own session cookies from the token
+ *   const token = await client.accounts.exchangeCode(code, redirectUri);
+ *   const customer = await client.payments.createCustomer(token.user.id);
  */
 
 import { AccountsNamespace } from "./accounts/namespace";
@@ -31,19 +28,15 @@ import { HttpTransport } from "./http";
 import { PaymentsNamespace } from "./payments/namespace";
 
 // ── Environment variable names ───────────────────────────────────────────────
-const ENV_ACCOUNTS_URL = "PPUSSH_ACCOUNTS_URL";
+const ENV_GATEWAY_URL = "PPUSSH_GATEWAY_URL";
 const ENV_ACCOUNTS_FRONTEND_URL = "PPUSSH_ACCOUNTS_FRONTEND_URL";
-const ENV_PAYMENTS_URL = "PPUSSH_PAYMENTS_URL";
+const ENV_PAYMENTS_ADMIN_KEY = "PPUSSH_PAYMENTS_ADMIN_KEY";
 
-function resolveUrl(kwarg: string | undefined, envVar: string, label: string): string {
-  if (kwarg) return kwarg.replace(/\/$/, "");
-  const envVal =
-    typeof process !== "undefined" ? process.env[envVar] : undefined;
-  if (envVal) return envVal.replace(/\/$/, "");
-  throw new Error(
-    `${label} URL is required. ` +
-      `Pass it as a constructor option or set the ${envVar} environment variable.`,
-  );
+function resolveEnv(name: string): string | undefined {
+  if (typeof process !== "undefined" && process.env[name]) {
+    return process.env[name];
+  }
+  return undefined;
 }
 
 export interface PpusshClientOptions {
@@ -52,35 +45,33 @@ export interface PpusshClientOptions {
   /** Your product's client_secret. Server-side only — never expose in browser code. */
   clientSecret: string;
   /**
-   * Product API key for Payments service.
-   * Used for customer and subscription operations.
-   * Get this from the Payments section in the Accounts admin console.
+   * The API gateway base URL — the single entry for all API calls.
+   * Falls back to PPUSSH_GATEWAY_URL. Required.
    */
-  paymentsProductKey?: string;
+  gatewayUrl?: string;
   /**
-   * Accounts service base URL. Falls back to the PPUSSH_ACCOUNTS_URL env var.
-   * Required — one of the two must be set.
-   */
-  accountsUrl?: string;
-  /**
-   * Accounts service base URL. Falls back to the PPUSSH_ACCOUNTS_FRONTEND_URL env var.
-   * Required — one of the two must be set.
+   * Accounts **frontend** base URL (the login page users are redirected to).
+   * Falls back to PPUSSH_ACCOUNTS_FRONTEND_URL. Required.
    */
   accountsFrontendUrl?: string;
   /**
-   * Payments service base URL. Falls back to the PPUSSH_PAYMENTS_URL env var.
-   * Required — one of the two must be set.
+   * Product API key for Payments. Optional — only needed when Payments is active.
    */
-  paymentsUrl?: string;
+  paymentsProductKey?: string;
+  /**
+   * Admin API key for Payments. Optional — only for admin calls.
+   * Falls back to PPUSSH_PAYMENTS_ADMIN_KEY.
+   */
+  paymentsAdminKey?: string;
 }
 
 export class PpusshClient {
   readonly accounts: AccountsNamespace;
   readonly payments: PaymentsNamespace;
 
-  private readonly _accountsUrl: string;
+  private readonly _gatewayUrl: string;
   private readonly _accountsFrontendUrl: string;
-  private readonly _paymentsUrl: string;
+  private readonly _paymentsAdminKey: string | undefined;
   private readonly _accountsTransport: HttpTransport;
   private readonly _paymentsTransport: HttpTransport;
 
@@ -88,27 +79,46 @@ export class PpusshClient {
     if (!options.clientId) throw new Error("clientId must not be empty.");
     if (!options.clientSecret) throw new Error("clientSecret must not be empty.");
 
-    this._accountsUrl = resolveUrl(options.accountsUrl, ENV_ACCOUNTS_URL, "Accounts");
-    this._accountsFrontendUrl = resolveUrl(options.accountsFrontendUrl, ENV_ACCOUNTS_FRONTEND_URL, "Accounts Frontend")
-    this._paymentsUrl = resolveUrl(options.paymentsUrl, ENV_PAYMENTS_URL, "Payments");
-    this._accountsTransport = new HttpTransport(this._accountsUrl);
-    this._paymentsTransport = new HttpTransport(this._paymentsUrl);
+    const gw = (options.gatewayUrl ?? resolveEnv(ENV_GATEWAY_URL))?.replace(/\/$/, "");
+    if (!gw) {
+      throw new Error(
+        "gatewayUrl is required. " +
+          "Pass it as a constructor option or set the PPUSSH_GATEWAY_URL environment variable.",
+      );
+    }
+
+    const frontend = (options.accountsFrontendUrl ?? resolveEnv(ENV_ACCOUNTS_FRONTEND_URL))?.replace(/\/$/, "");
+    if (!frontend) {
+      throw new Error(
+        "accountsFrontendUrl is required. " +
+          "Pass it as a constructor option or set the PPUSSH_ACCOUNTS_FRONTEND_URL environment variable.",
+      );
+    }
+
+    this._gatewayUrl = gw;
+    this._accountsFrontendUrl = frontend;
+    this._paymentsAdminKey = options.paymentsAdminKey ?? resolveEnv(ENV_PAYMENTS_ADMIN_KEY);
+
+    // Accounts transport hits the gateway root (gateway strips nothing for /users, /admin, /auth/*)
+    this._accountsTransport = new HttpTransport(this._gatewayUrl);
+    // Payments transport hits gateway + /payments (gateway strips the /payments prefix)
+    this._paymentsTransport = new HttpTransport(`${this._gatewayUrl}/payments`);
 
     this.accounts = new AccountsNamespace(this._accountsTransport, {
       clientId: options.clientId,
       clientSecret: options.clientSecret,
-      accountsUrl: this._accountsUrl,
-      accountsFrontendUrl: this._accountsFrontendUrl
+      accountsFrontendUrl: this._accountsFrontendUrl,
     });
 
     this.payments = new PaymentsNamespace(this._paymentsTransport, {
       productKey: options.paymentsProductKey,
+      adminKey: this._paymentsAdminKey,
     });
   }
 
-  /** Resolved Accounts service base URL. */
-  get accountsUrl(): string {
-    return this._accountsUrl;
+  /** Resolved gateway base URL. */
+  get gatewayUrl(): string {
+    return this._gatewayUrl;
   }
 
   /** Resolved Accounts frontend service base URL. */
@@ -116,12 +126,12 @@ export class PpusshClient {
     return this._accountsFrontendUrl;
   }
 
-  /** Resolved Payments service base URL. */
-  get paymentsUrl(): string {
-    return this._paymentsUrl;
+  /** Resolved Payments admin key, if configured. */
+  get paymentsAdminKey(): string | undefined {
+    return this._paymentsAdminKey;
   }
 
   toString(): string {
-    return `PpusshClient(accountsUrl=${this._accountsUrl}, accountsFrontendUrl=${this._accountsFrontendUrl}, paymentsUrl=${this._paymentsUrl})`;
+    return `PpusshClient(gatewayUrl=${this._gatewayUrl}, accountsFrontendUrl=${this._accountsFrontendUrl})`;
   }
 }

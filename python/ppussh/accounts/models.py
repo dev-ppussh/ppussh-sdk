@@ -1,84 +1,57 @@
 # ppussh/accounts/models.py
 """
-Pydantic models for every response shape returned by the Accounts service.
+Pydantic models for the response shapes returned by the Accounts service that
+the SDK depends on.
 
-All models use ``model_config = {"from_attributes": True}`` so they can be
-constructed from both raw dicts (``Model(**response.json())``) and ORM objects.
+The SDK authenticates **as a product** (OAuth client credentials + product/
+admin API keys). It does not forward end-user tokens, so the only Accounts
+response shapes the SDK needs are the OAuth token response and the embedded
+user claims — everything else (profiles, sessions, entitlements) is read by
+the product backend directly from its own cookies / the Accounts API as needed.
 """
 from __future__ import annotations
 
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, ConfigDict
+from pydantic import BaseModel, ConfigDict
 
 
 # ── Shared config ──────────────────────────────────────────────────────────────
 _cfg = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
-# ── Token verification ─────────────────────────────────────────────────────────
+# ── OAuth token response ───────────────────────────────────────────────────────
 
-class VerifyTokenResult(BaseModel):
-    """Response from ``GET /auth/verify-token``."""
-    model_config = _cfg
-
-    valid: bool
-    type: str                        # "access" | "admin_access"
-    user_id: str                     # UUID string
-    email: str
-
-
-# ── User profile ───────────────────────────────────────────────────────────────
-
-class UserProfile(BaseModel):
-    """
-    Full user profile returned by ``GET /users/me``.
-    Richer than the embedded user in the token response — includes account
-    status fields.
-    """
+class UserInToken(BaseModel):
+    """The user object embedded inside an OAuth token response."""
     model_config = _cfg
 
     id: str                          # UUID string
     email: str
     name: str | None = None
     picture_url: str | None = None
+    email_verified: bool = False
     is_superuser: bool = False
-    is_active: bool
-    is_verified: bool
-    created_at: datetime
-    updated_at: datetime | None = None
 
 
-# ── Entitlements ───────────────────────────────────────────────────────────────
+class TokenResponse(BaseModel):
+    """
+    Response from ``POST /oauth/token`` (authorization_code grant).
 
-class EntitlementResponse(BaseModel):
-    """Single entitlement entry from ``GET /users/me/entitlements``."""
+    Tokens are returned only in development mode.  In production the
+    accounts-api sets httpOnly cookies during the social callback; the
+    response body carries user info only.  The product backend creates
+    its own session cookie from ``user.id`` / ``user.email``.
+
+    ``access_token`` is ``None`` when tokens are already in cookies.
+    ``admin_access_token`` is present (non-null) only for superusers.
+    """
     model_config = _cfg
 
-    product_id: str                  # UUID string
-    client_id: str
-    name: str
-    slug: str
-    granted_at: datetime
-
-
-# ── Sessions ───────────────────────────────────────────────────────────────────
-
-class SessionResponse(BaseModel):
-    """Single session entry from ``GET /users/me/sessions``."""
-    model_config = _cfg
-
-    session_id: str                  # UUID string
-    ip_address: str | None = None
-    user_agent: str | None = None
-    country: str | None = None
-    city: str | None = None
-    region: str | None = None
-    browser: str | None = None
-    os: str | None = None
-    device_type: str | None = None
-    device_name: str | None = None
-    created_at: datetime
-    last_used_at: datetime
-    is_current: bool = False
+    access_token: str | None = None
+    token_type: str = "Bearer"
+    expires_in: int | None = None
+    refresh_token: str | None = None
+    admin_access_token: str | None = None
+    user: UserInToken

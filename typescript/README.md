@@ -7,7 +7,7 @@ Accounts (OIDC / OAuth 2.0) and Payments in a single client.
 
 - Node.js 18+
 - An Accounts **clientId** and **clientSecret** (obtain from the Accounts admin console)
-- A running instance of the Accounts and Payments services
+- A running instance of the Accounts and Payments services (typically behind the API gateway)
 
 ## Installation
 
@@ -17,17 +17,24 @@ npm install ppussh
 
 ## Configuration
 
-The SDK requires the base URLs for both services. Set them via environment
-variables (recommended for production) or pass them directly to the constructor.
+The SDK authenticates **as your product** — it uses your `clientId` /
+`clientSecret` for the OAuth token exchange and product/admin API keys for
+Payments calls. It never forwards end-user tokens: your product backend issues
+its own session cookies from the token returned by `exchangeCode()`.
 
-| Environment variable    | Purpose                        |
-| ----------------------- | ------------------------------ |
-| `PPUSSH_ACCOUNTS_URL`   | Base URL of the Accounts API   |
-| `PPUSSH_PAYMENTS_URL`   | Base URL of the Payments API   |
+The **gateway** is the single entry point. Pass `gatewayUrl` and the SDK
+routes accounts calls to the gateway root and payments calls to
+`gatewayUrl + "/payments"`.
+
+| Environment variable           | Purpose                                                        |
+| ------------------------------ | -------------------------------------------------------------- |
+| `PPUSSH_GATEWAY_URL`           | Gateway base URL (single entry for all API calls)              |
+| `PPUSSH_ACCOUNTS_FRONTEND_URL` | Accounts **frontend** base URL (the login page users see)      |
+| `PPUSSH_PAYMENTS_ADMIN_KEY`    | Optional admin key for Payments admin endpoints                |
 
 ```bash
-export PPUSSH_ACCOUNTS_URL="https://accounts.example.com"
-export PPUSSH_PAYMENTS_URL="https://payments.example.com"
+export PPUSSH_GATEWAY_URL="https://api.example.com"
+export PPUSSH_ACCOUNTS_FRONTEND_URL="https://accounts.example.com"
 ```
 
 ## Quick start
@@ -35,14 +42,13 @@ export PPUSSH_PAYMENTS_URL="https://payments.example.com"
 ```ts
 import { PpusshClient } from "ppussh";
 
-// URLs are read from PPUSSH_ACCOUNTS_URL / PPUSSH_PAYMENTS_URL env vars,
-// or pass them explicitly:
 const client = new PpusshClient({
   clientId: "your-product-client-id",
   clientSecret: "your-product-client-secret",
-  paymentsAdminKey: "your-payments-admin-key", // optional; needed for admin calls
-  // accountsUrl: "https://accounts.example.com", // or set PPUSSH_ACCOUNTS_URL
-  // paymentsUrl: "https://payments.example.com", // or set PPUSSH_PAYMENTS_URL
+  gatewayUrl: "https://api.example.com",
+  accountsFrontendUrl: "https://accounts.example.com",
+  paymentsProductKey: "your-payments-product-key", // optional; only if Payments is active
+  paymentsAdminKey: "your-payments-admin-key",     // optional; only for admin calls
 });
 ```
 
@@ -60,46 +66,19 @@ const REDIRECT_URI = "https://yourapp.example.com/auth/callback";
 app.get("/auth/callback", async (req, res) => {
   const { code } = req.query as { code: string };
   const token = await client.accounts.exchangeCode(code, REDIRECT_URI);
-  // token.user contains the authenticated user's profile
+  // The SDK authenticated AS the product; token.user is the logged-in user.
+  // Set your own session cookie from token.user.id / token.access_token.
   res.json({ userId: token.user.id, email: token.user.email });
 });
 ```
 
-### Token verification middleware
+### Login redirect
 
 ```ts
-import { PpusshClient, PpusshAuthError } from "ppussh";
-
-const client = new PpusshClient({ clientId: "...", clientSecret: "..." });
-
-async function requireAuth(req: Request): Promise<string> {
-  const auth = req.headers.get("authorization") ?? "";
-  if (!auth.startsWith("Bearer ")) throw new Response(null, { status: 401 });
-  const bearer = auth.slice(7);
-  try {
-    const result = await client.accounts.verifyToken(bearer);
-    return result.userId;
-  } catch (err) {
-    if (err instanceof PpusshAuthError) throw new Response(null, { status: 401 });
-    throw err;
-  }
-}
-```
-
-### Token refresh
-
-```ts
-// Uses the refresh token stored internally after exchangeCode()
-const newToken = await client.accounts.refresh();
-
-// Or pass an explicit refresh token:
-const newToken = await client.accounts.refresh("rt_...");
-```
-
-### Logout
-
-```ts
-await client.accounts.logout(); // uses stored refresh token
+import crypto from "crypto";
+const state = crypto.randomBytes(32).toString("base64url");
+const loginUrl = client.accounts.buildLoginUrl(REDIRECT_URI, state);
+// → redirect the browser to loginUrl
 ```
 
 ### Billing — create a customer and subscription
@@ -107,15 +86,12 @@ await client.accounts.logout(); // uses stored refresh token
 ```ts
 import { randomUUID } from "crypto";
 
-// Create or retrieve a customer record
 const customer = await client.payments.createCustomer(token.user.id, {
   workspaceId: "ws-123", // optional
 });
 
-// List available plans for a product
 const plans = await client.payments.listPlans("prod-abc");
 
-// Subscribe the customer
 const subscription = await client.payments.createSubscription({
   customerId: customer.id,
   paymentProductId: "prod-abc",
@@ -141,7 +117,6 @@ try {
   const token = await client.accounts.exchangeCode(code, REDIRECT_URI);
 } catch (err) {
   if (err instanceof PpusshConsentRequired) {
-    // Redirect the user to the consent flow
     redirectToConsent(err.clientId, err.productName);
   } else if (err instanceof PpusshAuthError) {
     // Invalid code or expired credentials
@@ -153,11 +128,11 @@ try {
 
 ### Retry policy
 
-| Condition               | Behaviour                                                |
-| ----------------------- | -------------------------------------------------------- |
-| 5xx / network error     | Up to 3 attempts, exponential backoff (0.5 s, 1 s, 2 s) |
-| 429 Too Many Requests   | Respects `Retry-After` header, max 2 retries             |
-| 4xx (not 429)           | Never retried — raises immediately                       |
+| Condition               | Behaviour                                                 |
+| ----------------------- | --------------------------------------------------------- |
+| 5xx / network error     | Up to 3 attempts, exponential backoff (0.5 s, 1 s, 2 s)  |
+| 429 Too Many Requests   | Respects `Retry-After` header, max 2 retries              |
+| 4xx (not 429)           | Never retried — raises immediately                        |
 
 ## API reference
 
@@ -165,27 +140,26 @@ try {
 
 | Method | Description |
 | ------ | ----------- |
-| `exchangeCode(code, redirectUri)` | Exchange an auth code for tokens (OIDC callback) |
-| `refresh(refreshToken?)` | Refresh the access token |
-| `verifyToken(accessToken)` | Validate an incoming bearer token (use in middleware) |
-| `logout(refreshToken?)` | Revoke the session |
-| `getUser(accessToken?)` | Fetch the authenticated user's profile |
-| `getEntitlements(accessToken?)` | List the user's product entitlements |
-| `getSessions(accessToken?)` | List the user's active sessions |
+| `buildLoginUrl(redirectUri, state, opts?)` | Build the Accounts login redirect URL |
+| `exchangeCode(code, redirectUri, opts?)` | Exchange an auth code for a token (OIDC callback) |
 
 ### `client.payments`
 
-| Method | Description |
-| ------ | ----------- |
-| `createCustomer(ownerUserId, opts?)` | Create or retrieve a customer record |
-| `getCustomer(customerId)` | Fetch a customer by ID |
-| `createSubscription(opts)` | Create a subscription |
-| `listSubscriptions(customerId, opts?)` | List subscriptions for a customer |
-| `getSubscription(subscriptionId)` | Fetch a subscription by ID |
-| `cancelSubscription(subscriptionId, opts?)` | Cancel a subscription |
-| `listPlans(paymentProductId)` | List billing plans *(requires `paymentsAdminKey`)* |
-| `getProductByAccountsId(accountsProductId)` | Resolve a payments product by its Accounts ID *(requires `paymentsAdminKey`)* |
-| `getMrr(opts?)` | Fetch MRR analytics *(requires `paymentsAdminKey`)* |
+| Method | Auth | Description |
+| ------ | ---- | ----------- |
+| `createCustomer(ownerUserId, opts?)` | product key | Create or retrieve a customer record |
+| `getCustomer(customerId)` | product key | Fetch a customer by ID |
+| `createSubscription(opts)` | product key | Create a subscription |
+| `listSubscriptions(customerId, opts?)` | product key | List subscriptions for a customer |
+| `getSubscription(subscriptionId)` | product key | Fetch a subscription by ID |
+| `cancelSubscription(subscriptionId, opts?)` | product key | Cancel a subscription |
+| `listPlans(paymentProductId)` | product key | List billing plans |
+| `createCheckoutSession(opts)` | product key | Create a checkout session (returns `checkoutUrl`) |
+| `checkAccess(userId, featureCode, workspaceId?)` | product key | Feature access check |
+| `getPaddleConfig()` | public | Paddle client token + environment |
+| `getProductByAccountsId(accountsProductId)` | admin key | Resolve a payments product by its Accounts ID |
+| `getMrr(opts?)` | admin key | Fetch MRR analytics |
+| `getBillingPortal(customerId, opts?)` | — | Not yet implemented (throws Error) |
 
 ## License
 

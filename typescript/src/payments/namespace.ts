@@ -31,10 +31,15 @@ import {
 export class PaymentsNamespace {
   private readonly _http: HttpTransport;
   private readonly _productKey: string | null;
+  private readonly _adminKey: string | null;
 
-  constructor(transport: HttpTransport, options: { productKey?: string | null } = {}) {
+  constructor(
+    transport: HttpTransport,
+    options: { productKey?: string | null; adminKey?: string | null } = {},
+  ) {
     this._http = transport;
     this._productKey = options.productKey ?? null;
+    this._adminKey = options.adminKey ?? null;
   }
 
   // ── Customers ──────────────────────────────────────────────────────────────
@@ -245,12 +250,12 @@ const response = await this._http.request("POST", "/subscriptions", {
    * @throws Error               If no productKey was provided at construction.
    */
   async listPlans(paymentProductId: string): Promise<PlanResponse[]> {
-    this._requireProductKey("listPlans");
+    this._requireAnyKey("listPlans");
     const response = await this._http.request(
       "GET",
       `/products/${paymentProductId}/plans`,
       {
-        headers: { "X-Product-Key": this._productKey! },
+        headers: this._getAuthHeaders(),
         isPayments: true,
       },
     );
@@ -268,13 +273,13 @@ const response = await this._http.request("POST", "/subscriptions", {
   async getProductByAccountsId(
     accountsProductId: string,
   ): Promise<PaymentProductResponse | null> {
-    this._requireProductKey("getProductByAccountsId");
+    this._requireAdminKey("getProductByAccountsId");
     try {
       const response = await this._http.request(
         "GET",
         `/admin/products/by-accounts-id/${accountsProductId}`,
         {
-          headers: { "X-Product-Key": this._productKey! },
+          headers: { "X-Admin-Key": this._adminKey! },
           isPayments: true,
         },
       );
@@ -401,14 +406,14 @@ const response = await this._http.request("POST", "/subscriptions", {
     startDate?: string;
     endDate?: string;
   } = {}): Promise<MRRResponse> {
-    this._requireProductKey("getMrr");
+    this._requireAdminKey("getMrr");
     const params: Record<string, string | undefined> = {};
     if (options.productId) params["product_id"] = options.productId;
     if (options.startDate) params["start_date"] = options.startDate;
     if (options.endDate) params["end_date"] = options.endDate;
 
     const response = await this._http.request("GET", "/admin/analytics/mrr", {
-      headers: { "X-Product-Key": this._productKey! },
+      headers: { "X-Admin-Key": this._adminKey! },
       params,
       isPayments: true,
     });
@@ -435,6 +440,9 @@ const response = await this._http.request("POST", "/subscriptions", {
   // ── Internal helpers ───────────────────────────────────────────────────────
 
   private _getAuthHeaders(): Record<string, string> {
+    if (this._adminKey) {
+      return { "X-Admin-Key": this._adminKey };
+    }
     if (this._productKey) {
       return { "X-Product-Key": this._productKey };
     }
@@ -445,7 +453,26 @@ const response = await this._http.request("POST", "/subscriptions", {
     if (!this._productKey) {
       throw new Error(
         `payments.${method}() requires a paymentsProductKey. ` +
-          "Pass paymentsProductKey: '...' to PpusshClient().",
+          "Payments may be inactive for your product — pass " +
+          "paymentsProductKey: '...' to PpusshClient() to enable plans, checkout, and access checks.",
+      );
+    }
+  }
+
+  private _requireAdminKey(method: string): void {
+    if (!this._adminKey) {
+      throw new Error(
+        `payments.${method}() requires a paymentsAdminKey. ` +
+          "Pass paymentsAdminKey: '...' to PpusshClient().",
+      );
+    }
+  }
+
+  private _requireAnyKey(method: string): void {
+    if (!this._adminKey && !this._productKey) {
+      throw new Error(
+        `payments.${method}() requires either a paymentsAdminKey ` +
+          "or a paymentsProductKey. Pass one to PpusshClient().",
       );
     }
   }

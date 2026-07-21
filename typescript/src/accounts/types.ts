@@ -1,61 +1,33 @@
 // ppussh/src/accounts/types.ts
 /**
- * TypeScript interfaces for every response shape returned by the Accounts service.
+ * TypeScript interfaces for the response shapes returned by the Accounts service
+ * that the SDK depends on.
+ *
+ * The SDK authenticates **as a product** (OAuth client credentials + product/admin
+ * API keys) and never forwards end-user tokens, so the only Accounts shapes the
+ * SDK needs are the OAuth token response and the embedded user claims.
  *
  * Mirror of the Python SDK's accounts/models.py — kept in sync manually.
  */
 
-// ── Token verification ────────────────────────────────────────────────────────
+// ── OAuth token response ────────────────────────────────────────────────────────
 
-/** Response from GET /auth/verify-token. */
-export interface VerifyTokenResult {
-  valid: boolean;
-  type: "access" | "admin_access";
-  user_id: string;
-  email: string;
-}
-
-// ── User profile ──────────────────────────────────────────────────────────────
-
-/** Full user profile returned by GET /users/me. */
-export interface UserProfile {
+/** The user object embedded inside an OAuth token response. */
+export interface UserInToken {
   id: string;
   email: string;
   name: string | null;
   picture_url: string | null;
+  email_verified: boolean;
   is_superuser: boolean;
-  is_active: boolean;
-  is_verified: boolean;
-  created_at: string; // ISO 8601
-  updated_at: string | null; // ISO 8601
 }
 
-// ── Entitlements ──────────────────────────────────────────────────────────────
-
-/** Single entitlement entry from GET /users/me/entitlements. */
-export interface EntitlementResponse {
-  product_id: string;
-  client_id: string;
-  name: string;
-  slug: string;
-  granted_at: string; // ISO 8601
-}
-
-// ── Sessions ──────────────────────────────────────────────────────────────────
-
-/** Single session entry from GET /users/me/sessions. */
-export interface SessionResponse {
-  session_id: string;
-  ip_address: string | null;
-  user_agent: string | null;
-  country: string | null;
-  city: string | null;
-  region: string | null;
-  browser: string | null;
-  os: string | null;
-  device_type: string | null;
-  device_name: string | null;
-  created_at: string; // ISO 8601
-  last_used_at: string; // ISO 8601
-  is_current: boolean;
+/** Response from POST /oauth/token (authorization_code grant). */
+export interface TokenResponse {
+  access_token?: string | null;
+  token_type: string; // "Bearer"
+  expires_in?: number | null;
+  refresh_token?: string | null;
+  admin_access_token?: string | null;
+  user: UserInToken;
 }

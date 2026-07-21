@@ -15,11 +15,9 @@
  *   // Build the login redirect URL
  *   const loginUrl = client.accounts.buildLoginUrl(redirectUri, state);
  *
- *   // Middleware token check
- *   const result = await client.accounts.verifyToken(bearer);
- *
- *   // Billing
- *   const customer = await client.payments.createCustomer(userId);
+ *   // OIDC callback — the product issues its own session cookies from the token
+ *   const token = await client.accounts.exchangeCode(code, redirectUri);
+ *   const customer = await client.payments.createCustomer(token.user.id);
  *
  * All errors are subclasses of PpusshError:
  *
@@ -50,10 +48,8 @@ export {
 
 // ── Accounts types ────────────────────────────────────────────────────────────
 export type {
-  EntitlementResponse,
-  SessionResponse,
-  UserProfile,
-  VerifyTokenResult,
+  TokenResponse,
+  UserInToken,
 } from "./accounts/types";
 
 // ── Payments types ────────────────────────────────────────────────────────────
