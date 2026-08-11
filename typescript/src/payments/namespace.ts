@@ -17,15 +17,23 @@ import { PpusshPaymentError } from "../errors";
 import { HttpTransport } from "../http";
 import {
   AccessResult,
+  CheckoutResponse,
   CheckoutSessionResponse,
+  ClaimResponse,
   CustomerCreateRequest,
   CustomerResponse,
   MRRResponse,
+  PackageResponse,
   PaddleConfigResponse,
   PaymentProductResponse,
   PlanResponse,
+  SandboxCheckoutResponse,
+  SandboxClaimResponse,
+  SandboxTransactionsResponse,
+  SubscriptionBillingDetails,
   SubscriptionListResponse,
   SubscriptionResponse,
+  TransactionResponse,
 } from "./types";
 
 export class PaymentsNamespace {
@@ -268,18 +276,21 @@ const response = await this._http.request("POST", "/subscriptions", {
    * Returns null if the product has not yet been registered in Payments
    * (HTTP 404 is treated as a non-exceptional "not registered yet" state).
    *
-   * @throws Error  If no productKey was provided at construction.
+   * Authenticates with the paymentsProductKey (or an optional
+   * paymentsAdminKey fallback).
+   *
+   * @throws Error  If no product (or admin) key was provided at construction.
    */
   async getProductByAccountsId(
     accountsProductId: string,
   ): Promise<PaymentProductResponse | null> {
-    this._requireAdminKey("getProductByAccountsId");
+    this._requireAnyKey("getProductByAccountsId");
     try {
       const response = await this._http.request(
         "GET",
         `/admin/products/by-accounts-id/${accountsProductId}`,
         {
-          headers: { "X-Admin-Key": this._adminKey! },
+          headers: this._getAuthHeaders(),
           isPayments: true,
         },
       );
@@ -395,7 +406,8 @@ const response = await this._http.request("POST", "/subscriptions", {
   /**
    * Fetch Monthly Recurring Revenue breakdown.
    *
-   * Requires admin key.
+   * Authenticates with the paymentsProductKey (or an optional
+   * paymentsAdminKey fallback). Product keys are scoped to their own product.
    *
    * @param productId   Filter to a specific product UUID (optional).
    * @param startDate   ISO date string e.g. "2025-01-01" (optional).
@@ -406,18 +418,325 @@ const response = await this._http.request("POST", "/subscriptions", {
     startDate?: string;
     endDate?: string;
   } = {}): Promise<MRRResponse> {
-    this._requireAdminKey("getMrr");
+    this._requireAnyKey("getMrr");
     const params: Record<string, string | undefined> = {};
     if (options.productId) params["product_id"] = options.productId;
     if (options.startDate) params["start_date"] = options.startDate;
     if (options.endDate) params["end_date"] = options.endDate;
 
     const response = await this._http.request("GET", "/admin/analytics/mrr", {
-      headers: { "X-Admin-Key": this._adminKey! },
+      headers: this._getAuthHeaders(),
       params,
       isPayments: true,
     });
     return response.data as MRRResponse;
+  }
+
+  // ── Credit purchases (one-time) ──────────────────────────────────────────────
+
+  /**
+   * Start a one-time credit purchase checkout for a user.
+   *
+   * Server-to-server: the SDK authenticates with X-Admin-Key / X-Product-Key
+   * and passes `userId` explicitly (the user does not need to be logged in).
+   * After payment, call `claimTransaction()` to atomically claim the credits.
+   *
+   * @param packageId   Package identifier (e.g. "pack_waitly_500").
+   * @param userId      UUID string of the Accounts user purchasing credits.
+   * @param returnUrl   URL to redirect after checkout completes.
+   */
+  async initiateCheckout(
+    packageId: string,
+    userId: string,
+    options: { returnUrl?: string; idempotencyKey?: string } = {},
+  ): Promise<CheckoutResponse> {
+    this._requireAnyKey("initiateCheckout");
+    const body: Record<string, string> = {
+      package_id: packageId,
+      return_url: options.returnUrl || "http://localhost:3000/checkout/success",
+      user_id: userId,
+    };
+    if (options.idempotencyKey) body.idempotency_key = options.idempotencyKey;
+
+    const response = await this._http.request("POST", "/checkout", {
+      json: body,
+      headers: this._getAuthHeaders(),
+      isPayments: true,
+    });
+    return response.data as CheckoutResponse;
+  }
+
+  /**
+   * Atomically claim a paid transaction (server-to-server only).
+   *
+   * @param userId          UUID string of the Accounts user.
+   * @param transactionId   UUID string of the transaction to claim.
+   */
+  async claimTransaction(
+    userId: string,
+    transactionId: string,
+  ): Promise<ClaimResponse> {
+    this._requireAnyKey("claimTransaction");
+    const response = await this._http.request(
+      "POST",
+      `/transactions/${transactionId}/claim`,
+      {
+        json: { user_id: userId },
+        headers: this._getAuthHeaders(),
+        isPayments: true,
+      },
+    );
+    return response.data as ClaimResponse;
+  }
+
+  /**
+   * List all PAID + undelivered transactions for a user.
+   *
+   * Server-to-server: the SDK authenticates with X-Admin-Key / X-Product-Key
+   * and passes `userId` explicitly.
+   *
+   * @param userId  UUID string of the Accounts user.
+   */
+  async getUnclaimedTransactions(userId: string): Promise<TransactionResponse[]> {
+    this._requireAnyKey("getUnclaimedTransactions");
+    const response = await this._http.request(
+      "GET",
+      "/transactions/unclaimed",
+      {
+        params: { user_id: userId },
+        headers: this._getAuthHeaders(),
+        isPayments: true,
+      },
+    );
+    return response.data as TransactionResponse[];
+  }
+
+  // ── Credit packages ────────────────────────────────────────────────────────
+
+  /**
+   * List credit packages.
+   *
+   * Authenticates with the paymentsProductKey (or an optional
+   * paymentsAdminKey fallback). Product keys are scoped to their own product.
+   *
+   * @param productId  Optional payments product UUID to filter by.
+   */
+  async listPackages(options: { productId?: string } = {}): Promise<PackageResponse[]> {
+    this._requireAnyKey("listPackages");
+    const params: Record<string, string> = {};
+    if (options.productId) params["product_id"] = options.productId;
+    const response = await this._http.request("GET", "/admin/packages", {
+      params,
+      headers: this._getAuthHeaders(),
+      isPayments: true,
+    });
+    return response.data as PackageResponse[];
+  }
+
+  /**
+   * Get a single credit package by its ID.
+   *
+   * Authenticates with the paymentsProductKey (or an optional
+   * paymentsAdminKey fallback).
+   *
+   * @param packageId  Package identifier (e.g. "pack_waitly_500").
+   */
+  async getPackage(packageId: string): Promise<PackageResponse> {
+    this._requireAnyKey("getPackage");
+    const response = await this._http.request(
+      "GET",
+      `/admin/packages/${packageId}`,
+      {
+        headers: this._getAuthHeaders(),
+        isPayments: true,
+      },
+    );
+    return response.data as PackageResponse;
+  }
+
+  /**
+   * Create a credit package.
+   *
+   * Authenticates with the paymentsProductKey (or an optional
+   * paymentsAdminKey fallback). Product keys can only create packages for
+   * their own product.
+   *
+   * @param packageId        Unique string identifier (e.g. "pack_waitly_500").
+   * @param productId        Payments product UUID string.
+   * @param creditAmount     Number of credits the package grants.
+   * @param priceCents       Price in integer cents — never float.
+   * @param currency         ISO 4217 currency code (default "USD").
+   * @param providerPriceIds Provider price map, e.g. {"paddle": "pri_..."}.
+   * @param isActive         Whether the package is purchasable (default true).
+   */
+  async createPackage(options: {
+    packageId: string;
+    productId: string;
+    creditAmount: number;
+    priceCents: number;
+    currency?: string;
+    providerPriceIds?: Record<string, string>;
+    isActive?: boolean;
+  }): Promise<PackageResponse> {
+    this._requireAnyKey("createPackage");
+    const body: Record<string, unknown> = {
+      id: options.packageId,
+      product_id: options.productId,
+      credit_amount: options.creditAmount,
+      price_cents: options.priceCents,
+      currency: options.currency ?? "USD",
+      provider_price_ids: options.providerPriceIds ?? {},
+      is_active: options.isActive ?? true,
+    };
+    const response = await this._http.request("POST", "/admin/packages", {
+      json: body,
+      headers: this._getAuthHeaders(),
+      isPayments: true,
+    });
+    return response.data as PackageResponse;
+  }
+
+  /**
+   * Update a credit package (only provided fields are changed).
+   *
+   * Authenticates with the paymentsProductKey (or an optional
+   * paymentsAdminKey fallback). Product keys can only update packages for
+   * their own product.
+   *
+   * @param packageId  Package identifier (e.g. "pack_waitly_500").
+   */
+  async updatePackage(
+    packageId: string,
+    options: {
+      creditAmount?: number | null;
+      priceCents?: number | null;
+      currency?: string | null;
+      providerPriceIds?: Record<string, string> | null;
+      isActive?: boolean | null;
+    } = {},
+  ): Promise<PackageResponse> {
+    this._requireAnyKey("updatePackage");
+    const body: Record<string, unknown> = {};
+    if (options.creditAmount !== undefined) body.credit_amount = options.creditAmount;
+    if (options.priceCents !== undefined) body.price_cents = options.priceCents;
+    if (options.currency !== undefined) body.currency = options.currency;
+    if (options.providerPriceIds !== undefined) body.provider_price_ids = options.providerPriceIds;
+    if (options.isActive !== undefined) body.is_active = options.isActive;
+    const response = await this._http.request(
+      "PATCH",
+      `/admin/packages/${packageId}`,
+      {
+        json: body,
+        headers: this._getAuthHeaders(),
+        isPayments: true,
+      },
+    );
+    return response.data as PackageResponse;
+  }
+
+  // ── Subscription details / invoices ─────────────────────────────────────────
+
+  /**
+   * Get a subscription together with its billing history (invoices).
+   *
+   * @param subscriptionId  UUID string of the subscription.
+   */
+  async getSubscriptionDetails(
+    subscriptionId: string,
+  ): Promise<SubscriptionBillingDetails> {
+    this._requireAnyKey("getSubscriptionDetails");
+    const response = await this._http.request(
+      "GET",
+      `/subscriptions/${subscriptionId}/details`,
+      {
+        headers: this._getAuthHeaders(),
+        isPayments: true,
+      },
+    );
+    return response.data as SubscriptionBillingDetails;
+  }
+
+  // ── Sandbox ─────────────────────────────────────────────────────────────────
+
+  /**
+   * Generate a sandbox test checkout URL for a user.
+   *
+   * Server-to-server: the SDK authenticates with X-Admin-Key / X-Product-Key
+   * and passes `userId` explicitly.
+   *
+   * @param productAccountsId  Accounts product UUID string.
+   * @param itemType           "CREDIT_PACKAGE" or "SUBSCRIPTION".
+   * @param priceId            Package ID (credit) or Plan UUID (subscription).
+   * @param userId             UUID string of the Accounts user.
+   * @param returnUrl          Optional redirect after checkout.
+   */
+  async sandboxCheckout(options: {
+    productAccountsId: string;
+    itemType: "CREDIT_PACKAGE" | "SUBSCRIPTION";
+    priceId: string;
+    userId: string;
+    returnUrl?: string;
+    idempotencyKey?: string;
+  }): Promise<SandboxCheckoutResponse> {
+    this._requireAnyKey("sandboxCheckout");
+    const body: Record<string, string> = {
+      product_accounts_id: options.productAccountsId,
+      item_type: options.itemType,
+      price_id: options.priceId,
+      user_id: options.userId,
+    };
+    if (options.returnUrl) body.return_url = options.returnUrl;
+    if (options.idempotencyKey) body.idempotency_key = options.idempotencyKey;
+    const response = await this._http.request("POST", "/sandbox/checkout", {
+      json: body,
+      headers: this._getAuthHeaders(),
+      isPayments: true,
+    });
+    return response.data as SandboxCheckoutResponse;
+  }
+
+  /**
+   * List a user's sandbox test transactions.
+   *
+   * @param userId  UUID string of the Accounts user.
+   * @param limit   Page size (1–100, default 20).
+   * @param offset  Pagination offset (default 0).
+   */
+  async listSandboxTransactions(
+    userId: string,
+    options: { limit?: number; offset?: number } = {},
+  ): Promise<SandboxTransactionsResponse> {
+    this._requireAnyKey("listSandboxTransactions");
+    const params: Record<string, string | number> = {
+      user_id: userId,
+      limit: options.limit ?? 20,
+      offset: options.offset ?? 0,
+    };
+    const response = await this._http.request("GET", "/sandbox/transactions", {
+      params,
+      headers: this._getAuthHeaders(),
+      isPayments: true,
+    });
+    return response.data as SandboxTransactionsResponse;
+  }
+
+  /**
+   * Claim a PAID sandbox transaction (simulate delivery).
+   *
+   * @param userId         UUID string of the Accounts user.
+   * @param transactionId  UUID string of the sandbox transaction.
+   */
+  async claimSandboxTransaction(
+    userId: string,
+    transactionId: string,
+  ): Promise<SandboxClaimResponse> {
+    this._requireAnyKey("claimSandboxTransaction");
+    const response = await this._http.request("POST", "/sandbox/claim", {
+      json: { transaction_id: transactionId, user_id: userId },
+      headers: this._getAuthHeaders(),
+      isPayments: true,
+    });
+    return response.data as SandboxClaimResponse;
   }
 
   // ── Billing portal (stub) ──────────────────────────────────────────────────
@@ -440,11 +759,11 @@ const response = await this._http.request("POST", "/subscriptions", {
   // ── Internal helpers ───────────────────────────────────────────────────────
 
   private _getAuthHeaders(): Record<string, string> {
-    if (this._adminKey) {
-      return { "X-Admin-Key": this._adminKey };
-    }
     if (this._productKey) {
       return { "X-Product-Key": this._productKey };
+    }
+    if (this._adminKey) {
+      return { "X-Admin-Key": this._adminKey };
     }
     return {};
   }
@@ -459,20 +778,11 @@ const response = await this._http.request("POST", "/subscriptions", {
     }
   }
 
-  private _requireAdminKey(method: string): void {
-    if (!this._adminKey) {
-      throw new Error(
-        `payments.${method}() requires a paymentsAdminKey. ` +
-          "Pass paymentsAdminKey: '...' to PpusshClient().",
-      );
-    }
-  }
-
   private _requireAnyKey(method: string): void {
-    if (!this._adminKey && !this._productKey) {
+    if (!this._productKey && !this._adminKey) {
       throw new Error(
-        `payments.${method}() requires either a paymentsAdminKey ` +
-          "or a paymentsProductKey. Pass one to PpusshClient().",
+        `payments.${method}() requires either a paymentsProductKey ` +
+          "or a paymentsAdminKey. Pass one to PpusshClient().",
       );
     }
   }

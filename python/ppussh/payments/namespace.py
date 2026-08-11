@@ -23,17 +23,27 @@ from typing import Any
 from ppussh._http import HttpTransport
 from ppussh.payments.models import (
     AccessResult,
+    CheckoutResponse,
     CheckoutSessionResponse,
+    ClaimResponse,
     CustomerCreateRequest,
     CustomerResponse,
     MRRResponse,
+    PackageCreateRequest,
+    PackageResponse,
+    PackageUpdateRequest,
     PaddleConfigResponse,
     PaymentProductResponse,
     PlanResponse,
+    SandboxCheckoutResponse,
+    SandboxClaimResponse,
+    SandboxTransactionsResponse,
+    SubscriptionBillingDetails,
     SubscriptionCancelRequest,
     SubscriptionCreateRequest,
     SubscriptionListResponse,
     SubscriptionResponse,
+    TransactionResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -330,8 +340,8 @@ class PaymentsNamespace:
         Returns None if the product has not yet been registered in Payments
         (HTTP 404 is treated as a non-exceptional "not registered yet" state).
 
-        Requires the ``payments_admin_key`` set on PpusshClient construction
-        (this is an admin-scoped endpoint).
+        Authenticates with the ``payments_product_key`` (or an optional
+        ``payments_admin_key`` fallback).
 
         Parameters
         ----------
@@ -339,15 +349,15 @@ class PaymentsNamespace:
 
         Raises
         ------
-        ValueError  If no payments_admin_key was provided at construction.
+        ValueError  If no product (or admin) key was provided at construction.
         """
-        self._require_admin_key("get_product_by_accounts_id")
+        self._require_any_key("get_product_by_accounts_id")
         from ppussh.errors import PpusshPaymentError
         try:
             response = await self._http.request(
                 "GET",
                 f"/admin/products/by-accounts-id/{accounts_product_id}",
-                headers=self._admin_headers(),
+                headers=self._get_auth_headers(),
                 is_payments=True,
             )
         except PpusshPaymentError as exc:
@@ -368,7 +378,9 @@ class PaymentsNamespace:
         """
         Fetch Monthly Recurring Revenue breakdown.
 
-        Requires ``payments_admin_key`` (this is an admin-scoped endpoint).
+        Authenticates with the ``payments_product_key`` (or an optional
+        ``payments_admin_key`` fallback). Product keys are scoped to their own
+        product.
 
         Parameters
         ----------
@@ -380,7 +392,7 @@ class PaymentsNamespace:
         -------
         MRRResponse  with total_mrr_cents, by_product, and by_plan breakdowns.
         """
-        self._require_admin_key("get_mrr")
+        self._require_any_key("get_mrr")
         params: dict[str, Any] = {}
         if product_id:
             params["product_id"] = product_id
@@ -392,11 +404,419 @@ class PaymentsNamespace:
         response = await self._http.request(
             "GET",
             "/admin/analytics/mrr",
-            headers=self._admin_headers(),
+            headers=self._get_auth_headers(),
             params=params,
             is_payments=True,
         )
         return MRRResponse.model_validate(response.json())
+
+    # ── Credit purchases (one-time) ──────────────────────────────────────────────
+
+    async def initiate_checkout(
+        self,
+        package_id: str,
+        *,
+        user_id: str,
+        return_url: str = "http://localhost:3000/checkout/success",
+        idempotency_key: str | None = None,
+    ) -> CheckoutResponse:
+        """
+        Start a one-time credit purchase checkout for a user.
+
+        Returns a checkout URL and transaction ID.  The caller redirects the
+        user to the checkout URL to complete payment.  After payment, the
+        product backend calls ``claim_transaction()`` to atomically claim
+        the credits.
+
+        Server-to-server: the SDK authenticates with X-Admin-Key /
+        X-Product-Key and passes ``user_id`` explicitly (the user does not
+        need to be logged in).
+
+        Parameters
+        ----------
+        package_id:       Package identifier (e.g. ``"pack_waitly_500"``).
+        user_id:          UUID string of the Accounts user purchasing credits.
+        return_url:       URL to redirect after checkout completes.
+        idempotency_key:  Optional idempotency key (UUID v4).
+
+        Returns
+        -------
+        CheckoutResponse with ``checkout_url`` and ``transaction_id``.
+        """
+        self._require_any_key("initiate_checkout")
+        body: dict[str, str] = {
+            "package_id": package_id,
+            "return_url": return_url,
+            "user_id": user_id,
+        }
+        if idempotency_key:
+            body["idempotency_key"] = idempotency_key
+
+        response = await self._http.request(
+            "POST",
+            "/checkout",
+            json=body,
+            headers=self._get_auth_headers(),
+            is_payments=True,
+        )
+        return CheckoutResponse.model_validate(response.json())
+
+    async def claim_transaction(
+        self,
+        user_id: str,
+        transaction_id: str,
+    ) -> ClaimResponse:
+        """
+        Atomically claim a paid transaction (server-to-server only).
+
+        Call this from the product backend after the user confirms purchase.
+        If the transaction is PAID and not yet delivered, it is marked
+        ``delivered=True`` and the credit amount is returned for the product
+        backend to grant to the user's local balance.
+
+        Parameters
+        ----------
+        user_id:          UUID string of the Accounts user.
+        transaction_id:   UUID string of the transaction to claim.
+
+        Returns
+        -------
+        ClaimResponse with ``claimed: bool`` and optional ``credit_amount``.
+
+        Raises
+        ------
+        PpusshPaymentError  On 403 (server-to-server auth required) or 404.
+        """
+        self._require_any_key("claim_transaction")
+        body = {"user_id": user_id}
+        response = await self._http.request(
+            "POST",
+            f"/transactions/{transaction_id}/claim",
+            json=body,
+            headers=self._get_auth_headers(),
+            is_payments=True,
+        )
+        return ClaimResponse.model_validate(response.json())
+
+    async def get_unclaimed_transactions(self, user_id: str) -> list[TransactionResponse]:
+        """
+        List all PAID + undelivered transactions for a user.
+
+        Server-to-server: the SDK authenticates with X-Admin-Key /
+        X-Product-Key and passes ``user_id`` explicitly (the user does not
+        need to be logged in).
+
+        Parameters
+        ----------
+        user_id:  UUID string of the Accounts user.
+
+        Returns
+        -------
+        list[TransactionResponse]
+        """
+        self._require_any_key("get_unclaimed_transactions")
+        response = await self._http.request(
+            "GET",
+            "/transactions/unclaimed",
+            params={"user_id": user_id},
+            headers=self._get_auth_headers(),
+            is_payments=True,
+        )
+        return [TransactionResponse.model_validate(t) for t in response.json()]
+
+    # ── Credit packages ────────────────────────────────────────────────────────
+
+    async def list_packages(self, *, product_id: str | None = None) -> list[PackageResponse]:
+        """
+        List credit packages.
+
+        Authenticates with the ``payments_product_key`` (or an optional
+        ``payments_admin_key`` fallback). Product keys are scoped to their own
+        product.
+
+        Parameters
+        ----------
+        product_id:  Optional payments product UUID string to filter by.
+
+        Returns
+        -------
+        list[PackageResponse]
+        """
+        self._require_any_key("list_packages")
+        params: dict[str, str] = {}
+        if product_id:
+            params["product_id"] = product_id
+        response = await self._http.request(
+            "GET",
+            "/admin/packages",
+            headers=self._get_auth_headers(),
+            params=params,
+            is_payments=True,
+        )
+        return [PackageResponse.model_validate(p) for p in response.json()]
+
+    async def get_package(self, package_id: str) -> PackageResponse:
+        """
+        Get a single credit package by its ID.
+
+        Authenticates with the ``payments_product_key`` (or an optional
+        ``payments_admin_key`` fallback).
+
+        Parameters
+        ----------
+        package_id:  Package identifier (e.g. ``"pack_waitly_500"``).
+
+        Returns
+        -------
+        PackageResponse
+        """
+        self._require_any_key("get_package")
+        response = await self._http.request(
+            "GET",
+            f"/admin/packages/{package_id}",
+            headers=self._get_auth_headers(),
+            is_payments=True,
+        )
+        return PackageResponse.model_validate(response.json())
+
+    async def create_package(
+        self,
+        *,
+        package_id: str,
+        product_id: str,
+        credit_amount: int,
+        price_cents: int,
+        currency: str = "USD",
+        provider_price_ids: dict[str, str] | None = None,
+        is_active: bool = True,
+    ) -> PackageResponse:
+        """
+        Create a credit package.
+
+        Authenticates with the ``payments_product_key`` (or an optional
+        ``payments_admin_key`` fallback). Product keys can only create
+        packages for their own product.
+
+        Parameters
+        ----------
+        package_id:        Unique string identifier, e.g. ``"pack_waitly_500"``.
+        product_id:        Payments product UUID string.
+        credit_amount:     Number of credits the package grants.
+        price_cents:       Price in integer cents (never float/Decimal).
+        currency:          ISO 4217 currency code (default "USD").
+        provider_price_ids: Optional provider price map, e.g.
+                           ``{"paddle": "pri_...", "dodo": "price_..."}``.
+        is_active:         Whether the package is purchasable (default True).
+
+        Returns
+        -------
+        PackageResponse
+        """
+        self._require_any_key("create_package")
+        body = PackageCreateRequest(
+            id=package_id,
+            product_id=product_id,
+            credit_amount=credit_amount,
+            price_cents=price_cents,
+            currency=currency,
+            provider_price_ids=provider_price_ids or {},
+            is_active=is_active,
+        )
+        response = await self._http.request(
+            "POST",
+            "/admin/packages",
+            json=body.model_dump(),
+            headers=self._get_auth_headers(),
+            is_payments=True,
+        )
+        return PackageResponse.model_validate(response.json())
+
+    async def update_package(
+        self,
+        package_id: str,
+        *,
+        credit_amount: int | None = None,
+        price_cents: int | None = None,
+        currency: str | None = None,
+        provider_price_ids: dict[str, str] | None = None,
+        is_active: bool | None = None,
+    ) -> PackageResponse:
+        """
+        Update a credit package (only provided fields are changed).
+
+        Authenticates with the ``payments_product_key`` (or an optional
+        ``payments_admin_key`` fallback). Product keys can only update
+        packages for their own product.
+
+        Parameters
+        ----------
+        package_id:  Package identifier (e.g. ``"pack_waitly_500"``).
+        credit_amount, price_cents, currency, provider_price_ids, is_active:
+            Optional fields to update.
+
+        Returns
+        -------
+        PackageResponse
+        """
+        self._require_any_key("update_package")
+        body = PackageUpdateRequest(
+            credit_amount=credit_amount,
+            price_cents=price_cents,
+            currency=currency,
+            provider_price_ids=provider_price_ids,
+            is_active=is_active,
+        )
+        response = await self._http.request(
+            "PATCH",
+            f"/admin/packages/{package_id}",
+            json=body.model_dump(exclude_none=True),
+            headers=self._get_auth_headers(),
+            is_payments=True,
+        )
+        return PackageResponse.model_validate(response.json())
+
+    # ── Subscription details / invoices ────────────────────────────────────────
+
+    async def get_subscription_details(
+        self,
+        subscription_id: str,
+    ) -> SubscriptionBillingDetails:
+        """
+        Get a subscription together with its billing history (invoices).
+
+        Parameters
+        ----------
+        subscription_id:  UUID string of the subscription.
+
+        Returns
+        -------
+        SubscriptionBillingDetails with ``subscription`` and ``billing_history``.
+        """
+        self._require_any_key("get_subscription_details")
+        response = await self._http.request(
+            "GET",
+            f"/subscriptions/{subscription_id}/details",
+            headers=self._get_auth_headers(),
+            is_payments=True,
+        )
+        return SubscriptionBillingDetails.model_validate(response.json())
+
+    # ── Sandbox ────────────────────────────────────────────────────────────────
+
+    async def sandbox_checkout(
+        self,
+        *,
+        product_accounts_id: str,
+        item_type: str,
+        price_id: str,
+        user_id: str,
+        return_url: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> SandboxCheckoutResponse:
+        """
+        Generate a sandbox test checkout URL for a user.
+
+        Server-to-server: the SDK authenticates with X-Admin-Key /
+        X-Product-Key and passes ``user_id`` explicitly.
+
+        Parameters
+        ----------
+        product_accounts_id:  Accounts product UUID string.
+        item_type:            ``"CREDIT_PACKAGE"`` or ``"SUBSCRIPTION"``.
+        price_id:             Package ID (credit) or Plan UUID (subscription).
+        user_id:              UUID string of the Accounts user.
+        return_url:           Optional redirect after checkout.
+        idempotency_key:      Optional idempotency key.
+
+        Returns
+        -------
+        SandboxCheckoutResponse with ``checkout_url`` and ``transaction_id``.
+        """
+        self._require_any_key("sandbox_checkout")
+        body: dict[str, str] = {
+            "product_accounts_id": product_accounts_id,
+            "item_type": item_type,
+            "price_id": price_id,
+            "user_id": user_id,
+        }
+        if return_url:
+            body["return_url"] = return_url
+        if idempotency_key:
+            body["idempotency_key"] = idempotency_key
+        response = await self._http.request(
+            "POST",
+            "/sandbox/checkout",
+            json=body,
+            headers=self._get_auth_headers(),
+            is_payments=True,
+        )
+        return SandboxCheckoutResponse.model_validate(response.json())
+
+    async def list_sandbox_transactions(
+        self,
+        user_id: str,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> SandboxTransactionsResponse:
+        """
+        List a user's sandbox test transactions.
+
+        Parameters
+        ----------
+        user_id:  UUID string of the Accounts user.
+        limit:    Page size (1–100, default 20).
+        offset:   Pagination offset (default 0).
+
+        Returns
+        -------
+        SandboxTransactionsResponse
+        """
+        self._require_any_key("list_sandbox_transactions")
+        params: dict[str, str | int] = {
+            "user_id": user_id,
+            "limit": limit,
+            "offset": offset,
+        }
+        response = await self._http.request(
+            "GET",
+            "/sandbox/transactions",
+            headers=self._get_auth_headers(),
+            params=params,
+            is_payments=True,
+        )
+        return SandboxTransactionsResponse.model_validate(response.json())
+
+    async def claim_sandbox_transaction(
+        self,
+        user_id: str,
+        transaction_id: str,
+    ) -> SandboxClaimResponse:
+        """
+        Claim a PAID sandbox transaction (simulate delivery).
+
+        Parameters
+        ----------
+        user_id:         UUID string of the Accounts user.
+        transaction_id:  UUID string of the sandbox transaction.
+
+        Returns
+        -------
+        SandboxClaimResponse with ``claimed`` and optional ``credit_amount``.
+        """
+        self._require_any_key("claim_sandbox_transaction")
+        body = {
+            "transaction_id": transaction_id,
+            "user_id": user_id,
+        }
+        response = await self._http.request(
+            "POST",
+            "/sandbox/claim",
+            json=body,
+            headers=self._get_auth_headers(),
+            is_payments=True,
+        )
+        return SandboxClaimResponse.model_validate(response.json())
 
     # ── Billing portal (stub) ──────────────────────────────────────────────────
 
@@ -563,11 +983,6 @@ class PaymentsNamespace:
             return {"X-Admin-Key": self._admin_key}
         return {}
 
-    def _admin_headers(self) -> dict[str, str]:
-        if self._admin_key:
-            return {"X-Admin-Key": self._admin_key}
-        return {}
-
     def _require_product_key(self, method: str) -> None:
         if not self._product_key:
             raise ValueError(
@@ -575,13 +990,6 @@ class PaymentsNamespace:
                 "Payments may be inactive for your product — pass "
                 "payments_product_key='...' to PpusshClient() to enable "
                 "plans, checkout, and access checks."
-            )
-
-    def _require_admin_key(self, method: str) -> None:
-        if not self._admin_key:
-            raise ValueError(
-                f"payments.{method}() requires a payments_admin_key. "
-                "Pass payments_admin_key='...' to PpusshClient()."
             )
 
     def _require_any_key(self, method: str) -> None:

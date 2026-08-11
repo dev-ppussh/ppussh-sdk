@@ -12,7 +12,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-
 # ── Shared config ──────────────────────────────────────────────────────────────
 _cfg = ConfigDict(from_attributes=True, populate_by_name=True)
 
@@ -203,3 +202,180 @@ class PaddleConfigResponse(BaseModel):
 
     client_token: str                      # Paddle client-side token
     environment: str                       # "sandbox" | "production"
+
+
+# ── Credit purchases (one-time) ─────────────────────────────────────────────────
+
+
+class CheckoutRequest(BaseModel):
+    """Request body for ``POST /checkout``."""
+    model_config = _cfg
+
+    package_id: str
+    return_url: str
+    idempotency_key: str | None = None
+    user_id: str | None = None          # required for server-to-server callers
+
+
+class CheckoutResponse(BaseModel):
+    """Response from ``POST /checkout``."""
+    model_config = _cfg
+
+    checkout_url: str
+    transaction_id: str                      # UUID string
+
+
+class ClaimRequest(BaseModel):
+    """Request body for ``POST /transactions/{id}/claim``."""
+    model_config = _cfg
+
+    user_id: str                             # UUID string
+
+
+class ClaimResponse(BaseModel):
+    """Response from ``POST /transactions/{id}/claim``."""
+    model_config = _cfg
+
+    claimed: bool
+    credit_amount: int | None = None
+
+
+class TransactionResponse(BaseModel):
+    """Response from ``GET /transactions/unclaimed``."""
+    model_config = _cfg
+
+    id: str                                  # UUID string
+    user_id: str                             # UUID string
+    product_id: str                          # UUID string
+    package_id: str
+    credit_amount: int
+    amount_paid_cents: int
+    status: str                              # PENDING | PAID | FAILED
+    delivered: bool
+    delivered_at: datetime | None = None
+    provider: str
+    provider_tx_id: str | None = None
+    created_at: datetime
+
+
+# ── Credit packages (admin) ─────────────────────────────────────────────────────
+
+
+class PackageCreateRequest(BaseModel):
+    """Request body for ``POST /admin/packages``."""
+    model_config = _cfg
+
+    id: str                                  # e.g. "pack_waitly_500"
+    product_id: str                          # UUID string
+    credit_amount: int
+    price_cents: int
+    currency: str = "USD"
+    provider_price_ids: dict[str, str] = {}
+    is_active: bool = True
+
+
+class PackageUpdateRequest(BaseModel):
+    """Request body for ``PATCH /admin/packages/{id}``."""
+    model_config = _cfg
+
+    credit_amount: int | None = None
+    price_cents: int | None = None
+    currency: str | None = None
+    provider_price_ids: dict[str, str] | None = None
+    is_active: bool | None = None
+
+
+class PackageResponse(BaseModel):
+    """Response from the ``/admin/packages`` endpoints."""
+    model_config = _cfg
+
+    id: str
+    product_id: str                          # UUID string
+    credit_amount: int
+    price_cents: int
+    currency: str
+    provider_price_ids: dict[str, str]
+    is_active: bool
+    created_at: datetime
+
+
+# ── Subscription billing details ───────────────────────────────────────────────
+
+
+class InvoiceHistoryItem(BaseModel):
+    """A single paid invoice in a subscription's billing history."""
+    model_config = _cfg
+
+    invoice_id: str                          # UUID string
+    amount_cents: int
+    currency: str
+    paid_at: datetime | None = None
+    status: str
+
+
+class SubscriptionBillingDetails(BaseModel):
+    """Response from ``GET /subscriptions/{id}/details``."""
+    model_config = _cfg
+
+    subscription: SubscriptionResponse
+    billing_history: list[InvoiceHistoryItem]
+
+
+# ── Sandbox ────────────────────────────────────────────────────────────────────
+
+
+class SandboxCheckoutRequest(BaseModel):
+    """Request body for ``POST /sandbox/checkout``."""
+    model_config = _cfg
+
+    product_accounts_id: str
+    item_type: str                          # "CREDIT_PACKAGE" | "SUBSCRIPTION"
+    price_id: str
+    return_url: str | None = None
+    idempotency_key: str | None = None
+    user_id: str | None = None              # required for server-to-server callers
+
+
+class SandboxCheckoutResponse(BaseModel):
+    """Response from ``POST /sandbox/checkout``."""
+    model_config = _cfg
+
+    checkout_url: str
+    transaction_id: str
+
+
+class SandboxTransactionItem(BaseModel):
+    """A single row in ``GET /sandbox/transactions``."""
+    model_config = _cfg
+
+    id: str
+    type: str                               # "CREDIT_PACKAGE" | "SUBSCRIPTION"
+    product_id: str
+    amount: int
+    currency: str
+    status: str
+    delivered: bool
+    created_at: str
+
+
+class SandboxTransactionsResponse(BaseModel):
+    """Response from ``GET /sandbox/transactions``."""
+    model_config = _cfg
+
+    transactions: list[SandboxTransactionItem]
+
+
+class SandboxClaimRequest(BaseModel):
+    """Request body for ``POST /sandbox/claim``."""
+    model_config = _cfg
+
+    transaction_id: str
+    user_id: str | None = None              # required for server-to-server callers
+
+
+class SandboxClaimResponse(BaseModel):
+    """Response from ``POST /sandbox/claim``."""
+    model_config = _cfg
+
+    claimed: bool
+    credit_amount: int | None = None

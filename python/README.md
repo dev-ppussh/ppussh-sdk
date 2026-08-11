@@ -33,6 +33,7 @@ routes accounts calls to the gateway root and payments calls to
 | `PPUSSH_GATEWAY_URL`           | Gateway base URL (single entry for all API calls)              |
 | `PPUSSH_ACCOUNTS_FRONTEND_URL` | Accounts **frontend** base URL (the login page users see)      |
 | `PPUSSH_PAYMENTS_ADMIN_KEY`    | Optional admin key for Payments admin endpoints                |
+| `PPUSSH_ACCOUNTS_ADMIN_KEY`    | Optional admin key for Accounts server-to-server entitlement calls |
 
 ```bash
 export PPUSSH_GATEWAY_URL="https://api.example.com"
@@ -50,7 +51,8 @@ client = PpusshClient(
     gateway_url="https://api.example.com",
     accounts_frontend_url="https://accounts.example.com",
     payments_product_key="your-payments-product-key",  # optional; only if Payments is active
-    payments_admin_key="your-payments-admin-key",      # optional; only for admin calls
+    payments_admin_key="your-payments-admin-key",      # optional legacy fallback for payments calls
+    accounts_admin_key="your-accounts-admin-key",      # optional; for server-to-server entitlements
 )
 ```
 
@@ -99,6 +101,98 @@ subscription = await client.payments.create_subscription(
     payment_product_id="prod-abc",
     plan_key="pro",
     idempotency_key=str(uuid4()),
+)
+```
+
+### Server-to-server entitlements
+
+Grant, update, or revoke a user's per-product entitlements without a login —
+the SDK authenticates with the `accounts_admin_key` and passes the user id
+explicitly. This is how your product backend provisions access to a user who
+is not currently logged in.
+
+```python
+# Grant a user access to your product (member role + beta flag)
+entitlement = await client.accounts.grant_entitlement(
+    user_id="uuid-of-user",
+    product_id="uuid-of-your-product",
+    role="member",
+    feature_flags={"beta": True},
+)
+
+# Toggle flags later (None removes a flag, others are merged)
+await client.accounts.update_entitlement_flags(
+    entitlement.id,
+    {"beta": False, "founding": None},
+)
+
+# List what a user has access to
+ents = await client.accounts.list_user_entitlements("uuid-of-user")
+
+# Revoke access entirely
+await client.accounts.revoke_entitlement(entitlement.id)
+```
+
+### One-time credit purchases (server-to-server)
+
+Credit purchases are server-to-server too: pass the product/admin key and the
+explicit `user_id`, then redirect the user to the returned checkout URL.
+
+```python
+# Start checkout — the user's browser is redirected to checkout_url
+checkout = await client.payments.initiate_checkout(
+    package_id="pack_waitly_500",
+    user_id="uuid-of-user",
+    return_url="https://yourapp.example.com/checkout/success",
+    idempotency_key=str(uuid4()),
+)
+
+# After payment, claim the credits atomically
+claimed = await client.payments.claim_transaction(
+    user_id="uuid-of-user",
+    transaction_id=checkout.transaction_id,
+)
+if claimed.claimed:
+    grant_credits(claimed.credit_amount)
+
+# Reconcile any PAID-but-undelivered purchases
+pending = await client.payments.get_unclaimed_transactions("uuid-of-user")
+```
+
+### Credit packages (admin)
+
+```python
+pkgs = await client.payments.list_packages(product_id="prod-abc")
+pkg = await client.payments.get_package("pack_waitly_500")
+
+created = await client.payments.create_package(
+    package_id="pack_waitly_500",
+    product_id="prod-abc",
+    credit_amount=500,
+    price_cents=4900,          # integer cents — never float
+    provider_price_ids={"paddle": "pri_01abc..."},
+)
+
+updated = await client.payments.update_package("pack_waitly_500", price_cents=3900)
+```
+
+### Subscription details & sandbox
+
+```python
+details = await client.payments.get_subscription_details("uuid-of-subscription")
+print(details.subscription.status, details.billing_history)
+
+# Sandbox — generate test checkouts / transactions without real payment
+sb = await client.payments.sandbox_checkout(
+    product_accounts_id="uuid-of-product",
+    item_type="CREDIT_PACKAGE",
+    price_id="pack_waitly_500",
+    user_id="uuid-of-user",
+)
+sb_tx = await client.payments.list_sandbox_transactions("uuid-of-user")
+sb_claim = await client.payments.claim_sandbox_transaction(
+    user_id="uuid-of-user",
+    transaction_id=sb.transaction_id,
 )
 ```
 
@@ -151,6 +245,10 @@ except PpusshNetworkError:
 | ------ | ----------- |
 | `build_login_url(redirect_uri, state, *, next_url?)` | Build the Accounts login redirect URL |
 | `exchange_code(code, redirect_uri, *, state?, next_url?)` | Exchange an auth code for a token (OIDC callback) |
+| `list_user_entitlements(user_id)` | admin key — list a user's per-product entitlements |
+| `grant_entitlement(user_id, product_id, *, role?, feature_flags?)` | admin key — grant a user access to a product |
+| `update_entitlement_flags(entitlement_id, feature_flags)` | admin key — merge flag updates (`None` removes a flag) |
+| `revoke_entitlement(entitlement_id)` | admin key — revoke a user's entitlement |
 
 ### `client.payments`
 
@@ -168,6 +266,17 @@ except PpusshNetworkError:
 | `get_paddle_config()` | public | Paddle client token + environment |
 | `get_product_by_accounts_id(accounts_product_id)` | admin key | Resolve a payments product by its Accounts ID |
 | `get_mrr(...)` | admin key | Fetch MRR analytics |
+| `initiate_checkout(package_id, *, user_id, ...)` | either key | Start a credit checkout for a user (server-to-server) |
+| `claim_transaction(user_id, transaction_id)` | either key | Atomically claim a PAID credit transaction |
+| `get_unclaimed_transactions(user_id)` | either key | List PAID + undelivered transactions for a user |
+| `list_packages(*, product_id?)` | admin key | List credit packages |
+| `get_package(package_id)` | admin key | Fetch a credit package by ID |
+| `create_package(...)` | admin key | Create a credit package |
+| `update_package(package_id, ...)` | admin key | Update a credit package |
+| `get_subscription_details(subscription_id)` | either key | Fetch a subscription + billing history (invoices) |
+| `sandbox_checkout(...)` | either key | Generate a sandbox test checkout URL |
+| `list_sandbox_transactions(user_id, ...)` | either key | List a user's sandbox transactions |
+| `claim_sandbox_transaction(user_id, transaction_id)` | either key | Claim a PAID sandbox transaction |
 | `get_billing_portal(customer_id, ...)` | — | Not yet implemented (raises `NotImplementedError`) |
 
 ## License

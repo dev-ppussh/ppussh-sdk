@@ -48,6 +48,10 @@ export {
 
 // ── Accounts types ────────────────────────────────────────────────────────────
 export type {
+  EntitlementCreateRequest,
+  EntitlementUpdateRequest,
+  EntitlementWithProductResponse,
+  FeatureFlags,
   TokenResponse,
   UserInToken,
 } from "./accounts/types";
@@ -55,21 +59,37 @@ export type {
 // ── Payments types ────────────────────────────────────────────────────────────
 export type {
   AccessResult,
+  CheckoutRequest,
+  CheckoutResponse,
   CheckoutSessionRequest,
   CheckoutSessionResponse,
+  ClaimRequest,
+  ClaimResponse,
   CustomerCreateRequest,
   CustomerResponse,
+  InvoiceHistoryItem,
   MRRByPlan,
   MRRByProduct,
   MRRResponse,
+  PackageCreateRequest,
+  PackageResponse,
+  PackageUpdateRequest,
   PaddleConfigResponse,
   PaymentProductResponse,
   PlanResponse,
+  SandboxCheckoutRequest,
+  SandboxCheckoutResponse,
+  SandboxClaimRequest,
+  SandboxClaimResponse,
+  SandboxTransactionItem,
+  SandboxTransactionsResponse,
+  SubscriptionBillingDetails,
   SubscriptionCancelRequest,
   SubscriptionCreateRequest,
   SubscriptionListResponse,
   SubscriptionResponse,
   SubscriptionStatus,
+  TransactionResponse,
 } from "./payments/types";
 
 // ── Webhooks ──────────────────────────────────────────────────────────────────

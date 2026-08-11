@@ -31,3 +31,32 @@ export interface TokenResponse {
   admin_access_token?: string | null;
   user: UserInToken;
 }
+
+// ── Entitlements ──────────────────────────────────────────────────────────────
+
+/** Entitlement feature flags are always booleans. */
+export type FeatureFlags = Record<string, boolean>;
+
+/** Response from GET /users/{id}/entitlements (one per product). */
+export interface EntitlementWithProductResponse {
+  id: string;
+  product_id: string;
+  product_name: string;
+  product_slug: string;
+  role: string; // e.g. "owner" | "admin" | "member" | "viewer"
+  feature_flags: FeatureFlags;
+  created_at: string; // ISO 8601
+}
+
+/** Request body for POST /admin/entitlements. */
+export interface EntitlementCreateRequest {
+  user_id: string;
+  product_id: string;
+  role: string;
+  feature_flags?: FeatureFlags;
+}
+
+/** Request body for PATCH /admin/entitlements/{id}. */
+export interface EntitlementUpdateRequest {
+  feature_flags?: Record<string, boolean | null>; // null removes a flag
+}

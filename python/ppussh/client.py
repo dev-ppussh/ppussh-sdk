@@ -44,6 +44,7 @@ from ppussh.payments.namespace import PaymentsNamespace
 _ENV_GATEWAY_URL: Final = "PPUSSH_GATEWAY_URL"
 _ENV_ACCOUNTS_FRONTEND_URL: Final = "PPUSSH_ACCOUNTS_FRONTEND_URL"
 _ENV_PAYMENTS_ADMIN_KEY: Final = "PPUSSH_PAYMENTS_ADMIN_KEY"
+_ENV_ACCOUNTS_ADMIN_KEY: Final = "PPUSSH_ACCOUNTS_ADMIN_KEY"
 
 
 def _resolve_env(name: str) -> str | None:
@@ -79,8 +80,14 @@ class PpusshClient:
         operations. Optional — only needed when Payments is active.
         A ``ValueError`` is raised by the methods that need it if missing.
     payments_admin_key:
-        Admin API key for Payments. Used for admin operations (product lookup,
-        MRR analytics). Falls back to ``PPUSSH_PAYMENTS_ADMIN_KEY``. Optional.
+        Admin API key for Payments. Used as a legacy fallback for calls that
+        prefer the product key (package CRUD, product lookup, MRR analytics).
+        Falls back to ``PPUSSH_PAYMENTS_ADMIN_KEY``. Optional — the
+        ``payments_product_key`` is sufficient for product-scoped operations.
+    accounts_admin_key:
+        Admin API key for Accounts. Used for server-to-server entitlement
+        management (grant, revoke, update flags, list). Falls back to
+        ``PPUSSH_ACCOUNTS_ADMIN_KEY``. Optional.
     """
 
     def __init__(
@@ -92,6 +99,7 @@ class PpusshClient:
         accounts_frontend_url: str | None = None,
         payments_product_key: str | None = None,
         payments_admin_key: str | None = None,
+        accounts_admin_key: str | None = None,
     ) -> None:
         if not client_id:
             raise ValueError("client_id must not be empty.")
@@ -121,6 +129,7 @@ class PpusshClient:
             )
 
         self._payments_admin_key = payments_admin_key or _resolve_env(_ENV_PAYMENTS_ADMIN_KEY)
+        self._accounts_admin_key = accounts_admin_key or _resolve_env(_ENV_ACCOUNTS_ADMIN_KEY)
 
         # Accounts transport hits the gateway root (gateway strips nothing for /users, /admin, /auth/*)
         self._accounts_transport = HttpTransport(self._gateway_url)
@@ -132,6 +141,7 @@ class PpusshClient:
             client_id=client_id,
             client_secret=client_secret,
             accounts_frontend_url=self._accounts_frontend_url,
+            admin_key=self._accounts_admin_key,
         )
         self.payments = PaymentsNamespace(
             self._payments_transport,
@@ -173,6 +183,11 @@ class PpusshClient:
     def payments_admin_key(self) -> str | None:
         """Resolved Payments admin key, if configured."""
         return self._payments_admin_key
+
+    @property
+    def accounts_admin_key(self) -> str | None:
+        """Resolved Accounts admin key, if configured."""
+        return self._accounts_admin_key
 
     def __repr__(self) -> str:
         return (

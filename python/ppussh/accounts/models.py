@@ -3,19 +3,16 @@
 Pydantic models for the response shapes returned by the Accounts service that
 the SDK depends on.
 
-The SDK authenticates **as a product** (OAuth client credentials + product/
-admin API keys). It does not forward end-user tokens, so the only Accounts
-response shapes the SDK needs are the OAuth token response and the embedded
-user claims — everything else (profiles, sessions, entitlements) is read by
-the product backend directly from its own cookies / the Accounts API as needed.
+The SDK authenticates **as a product** (OAuth client credentials + admin API
+keys). The OAuth token response carries the embedded user claims; entitlement
+management is done server-to-server with the ``accounts_admin_key`` against
+the ``/admin/entitlements`` endpoints.
 """
 from __future__ import annotations
 
 from datetime import datetime
-from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
-
 
 # ── Shared config ──────────────────────────────────────────────────────────────
 _cfg = ConfigDict(from_attributes=True, populate_by_name=True)
@@ -55,3 +52,40 @@ class TokenResponse(BaseModel):
     refresh_token: str | None = None
     admin_access_token: str | None = None
     user: UserInToken
+
+
+# ── Entitlements (server-to-server, admin key) ─────────────────────────────────
+
+class EntitlementWithProductResponse(BaseModel):
+    """Response from ``GET /admin/users/{id}/entitlements``,
+    ``POST /admin/entitlements`` and ``PATCH /admin/entitlements/{id}``."""
+    model_config = _cfg
+
+    id: str                                # UUID string — entitlement ID
+    product_id: str                        # UUID string
+    product_name: str
+    product_slug: str
+    role: str                              # "member" | "admin" | "owner"
+    feature_flags: dict[str, bool]         # e.g. {"beta": true, "founding": false}
+    created_at: datetime
+
+
+class EntitlementCreateRequest(BaseModel):
+    """Request body for ``POST /admin/entitlements``."""
+    model_config = _cfg
+
+    user_id: str                           # UUID string
+    product_id: str                        # UUID string
+    role: str = "member"                   # "member" | "admin" | "owner"
+    feature_flags: dict[str, bool] | None = None
+
+
+class EntitlementUpdateRequest(BaseModel):
+    """Request body for ``PATCH /admin/entitlements/{id}``.
+
+    ``feature_flags`` uses merge semantics — booleans set flags, ``None``
+    removes them.
+    """
+    model_config = _cfg
+
+    feature_flags: dict[str, bool | None] | None = None

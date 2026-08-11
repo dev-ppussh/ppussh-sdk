@@ -31,6 +31,7 @@ import { PaymentsNamespace } from "./payments/namespace";
 const ENV_GATEWAY_URL = "PPUSSH_GATEWAY_URL";
 const ENV_ACCOUNTS_FRONTEND_URL = "PPUSSH_ACCOUNTS_FRONTEND_URL";
 const ENV_PAYMENTS_ADMIN_KEY = "PPUSSH_PAYMENTS_ADMIN_KEY";
+const ENV_ACCOUNTS_ADMIN_KEY = "PPUSSH_ACCOUNTS_ADMIN_KEY";
 
 function resolveEnv(name: string): string | undefined {
   if (typeof process !== "undefined" && process.env[name]) {
@@ -59,10 +60,16 @@ export interface PpusshClientOptions {
    */
   paymentsProductKey?: string;
   /**
-   * Admin API key for Payments. Optional — only for admin calls.
-   * Falls back to PPUSSH_PAYMENTS_ADMIN_KEY.
+   * Admin API key for Payments. Optional legacy fallback — the product key
+   * already authorizes all Payments calls. Falls back to PPUSSH_PAYMENTS_ADMIN_KEY.
    */
   paymentsAdminKey?: string;
+  /**
+   * Admin API key for Accounts. Optional — required for server-to-server
+   * entitlement grant/revoke calls (the user does not need to be logged in).
+   * Falls back to PPUSSH_ACCOUNTS_ADMIN_KEY.
+   */
+  accountsAdminKey?: string;
 }
 
 export class PpusshClient {
@@ -72,6 +79,7 @@ export class PpusshClient {
   private readonly _gatewayUrl: string;
   private readonly _accountsFrontendUrl: string;
   private readonly _paymentsAdminKey: string | undefined;
+  private readonly _accountsAdminKey: string | undefined;
   private readonly _accountsTransport: HttpTransport;
   private readonly _paymentsTransport: HttpTransport;
 
@@ -98,6 +106,7 @@ export class PpusshClient {
     this._gatewayUrl = gw;
     this._accountsFrontendUrl = frontend;
     this._paymentsAdminKey = options.paymentsAdminKey ?? resolveEnv(ENV_PAYMENTS_ADMIN_KEY);
+    this._accountsAdminKey = options.accountsAdminKey ?? resolveEnv(ENV_ACCOUNTS_ADMIN_KEY);
 
     // Accounts transport hits the gateway root (gateway strips nothing for /users, /admin, /auth/*)
     this._accountsTransport = new HttpTransport(this._gatewayUrl);
@@ -108,6 +117,7 @@ export class PpusshClient {
       clientId: options.clientId,
       clientSecret: options.clientSecret,
       accountsFrontendUrl: this._accountsFrontendUrl,
+      adminKey: this._accountsAdminKey,
     });
 
     this.payments = new PaymentsNamespace(this._paymentsTransport, {
@@ -126,9 +136,14 @@ export class PpusshClient {
     return this._accountsFrontendUrl;
   }
 
-  /** Resolved Payments admin key, if configured. */
+  /** Resolved Payments admin key, if configured (optional legacy fallback). */
   get paymentsAdminKey(): string | undefined {
     return this._paymentsAdminKey;
+  }
+
+  /** Resolved Accounts admin key, if configured. */
+  get accountsAdminKey(): string | undefined {
+    return this._accountsAdminKey;
   }
 
   toString(): string {
