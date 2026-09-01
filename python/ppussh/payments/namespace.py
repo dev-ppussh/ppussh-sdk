@@ -419,6 +419,7 @@ class PaymentsNamespace:
         user_id: str,
         return_url: str = "http://localhost:3000/checkout/success",
         idempotency_key: str | None = None,
+        provider: str | None = None,
     ) -> CheckoutResponse:
         """
         Start a one-time credit purchase checkout for a user.
@@ -451,6 +452,8 @@ class PaymentsNamespace:
         }
         if idempotency_key:
             body["idempotency_key"] = idempotency_key
+        if provider is not None:
+            body["provider"] = provider
 
         response = await self._http.request(
             "POST",
@@ -856,8 +859,8 @@ class PaymentsNamespace:
         plan_id: str,
         return_url: str,
         idempotency_key: str,
-        *,
         billing_email: str | None = None,
+        provider: str | None = None,
     ) -> CheckoutSessionResponse:
         """
         Create a checkout session that returns a portal URL for the centralized
@@ -896,6 +899,8 @@ class PaymentsNamespace:
         }
         if billing_email is not None:
             body["billing_email"] = billing_email
+        if provider is not None:
+            body["provider"] = provider
         response = await self._http.request(
             "POST",
             "/subscriptions/checkout-session",

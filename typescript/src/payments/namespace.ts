@@ -364,6 +364,7 @@ const response = await this._http.request("POST", "/subscriptions", {
     returnUrl: string;
     idempotencyKey: string;
     billingEmail?: string | null;
+    provider?: string | null;
   }): Promise<CheckoutSessionResponse> {
     this._requireProductKey("createCheckoutSession");
     const body: Record<string, string | null> = {
@@ -374,6 +375,9 @@ const response = await this._http.request("POST", "/subscriptions", {
     };
     if (options.billingEmail != null) {
       body.billing_email = options.billingEmail;
+    }
+    if (options.provider != null) {
+      body.provider = options.provider;
     }
     const response = await this._http.request(
       "POST",
@@ -448,7 +452,7 @@ const response = await this._http.request("POST", "/subscriptions", {
   async initiateCheckout(
     packageId: string,
     userId: string,
-    options: { returnUrl?: string; idempotencyKey?: string } = {},
+    options: { returnUrl?: string; idempotencyKey?: string; provider?: string | null } = {},
   ): Promise<CheckoutResponse> {
     this._requireAnyKey("initiateCheckout");
     const body: Record<string, string> = {
@@ -457,6 +461,7 @@ const response = await this._http.request("POST", "/subscriptions", {
       user_id: userId,
     };
     if (options.idempotencyKey) body.idempotency_key = options.idempotencyKey;
+    if (options.provider != null) body.provider = options.provider;
 
     const response = await this._http.request("POST", "/checkout", {
       json: body,

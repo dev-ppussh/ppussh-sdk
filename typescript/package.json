@@ -1,6 +1,6 @@
 {
   "name": "ppussh",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "PPUSSH Ecosystem SDK — Accounts (OIDC) + Payments client for TypeScript/JavaScript",
   "license": "MIT",
   "author": "PPUSSH <dev@ppussh.com>",
