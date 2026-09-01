@@ -101,7 +101,22 @@ subscription = await client.payments.create_subscription(
     payment_product_id="prod-abc",
     plan_key="pro",
     idempotency_key=str(uuid4()),
+    provider="paddle",  # optional — "paddle" | "dodo" (uses plan default if omitted)
+    return_url="https://yourapp.example.com/billing/success",  # optional
 )
+```
+
+### Checkout session (hosted portal)
+
+```python
+session = await client.payments.create_checkout_session(
+    user_id=token.user.id,
+    plan_id="plan-uuid",
+    return_url="https://yourapp.example.com/billing/success",
+    idempotency_key=str(uuid4()),
+    provider="paddle",  # optional
+)
+# → redirect to session.checkout_url
 ```
 
 ### Server-to-server entitlements
@@ -145,6 +160,7 @@ checkout = await client.payments.initiate_checkout(
     user_id="uuid-of-user",
     return_url="https://yourapp.example.com/checkout/success",
     idempotency_key=str(uuid4()),
+    provider="bachs",  # optional — "paddle" | "dodo" | "bachs" (uses package default if omitted)
 )
 
 # After payment, claim the credits atomically
@@ -170,7 +186,7 @@ created = await client.payments.create_package(
     product_id="prod-abc",
     credit_amount=500,
     price_cents=4900,          # integer cents — never float
-    provider_price_ids={"paddle": "pri_01abc..."},
+    provider_price_ids={"paddle": "pri_01abc...", "bachs": "price_bachs_xxx"},
 )
 
 updated = await client.payments.update_package("pack_waitly_500", price_cents=3900)
@@ -194,6 +210,25 @@ sb_claim = await client.payments.claim_sandbox_transaction(
     user_id="uuid-of-user",
     transaction_id=sb.transaction_id,
 )
+```
+
+### Analytics & product lookup
+
+```python
+# Look up a payments product by its Accounts product ID
+payments_product = await client.payments.get_product_by_accounts_id("uuid-of-accounts-product")
+
+# Fetch MRR breakdown (optionally scoped to a product)
+mrr = await client.payments.get_mrr(product_id="uuid-of-product")
+print(mrr.total_mrr_cents, mrr.by_plan)
+```
+
+### Subscription access check
+
+```python
+access = await client.payments.check_access(user_id=user.id, feature_code="premium_nodes")
+if not access.has_access:
+    raise HTTPException(403, f"Upgrade required for {access.feature_name}")
 ```
 
 ### Async context manager (scripts / one-off usage)
@@ -256,23 +291,23 @@ except PpusshNetworkError:
 | ------ | ---- | ----------- |
 | `create_customer(owner_user_id, ...)` | product key | Create or retrieve a customer record |
 | `get_customer(customer_id)` | product key | Fetch a customer by ID |
-| `create_subscription(...)` | product key | Create a subscription |
+| `create_subscription(...)` | product key | Create a subscription (supports `provider`, `return_url`) |
 | `list_subscriptions(customer_id, ...)` | product key | List subscriptions for a customer |
 | `get_subscription(subscription_id)` | product key | Fetch a subscription by ID |
 | `cancel_subscription(subscription_id, ...)` | product key | Cancel a subscription |
 | `list_plans(payment_product_id)` | product key | List billing plans |
-| `create_checkout_session(...)` | product key | Create a checkout session (returns `checkout_url`) |
+| `create_checkout_session(...)` | product key | Create a checkout session (supports `provider`) |
 | `check_access(user_id, feature_code, ...)` | product key | Feature access check |
 | `get_paddle_config()` | public | Paddle client token + environment |
-| `get_product_by_accounts_id(accounts_product_id)` | admin key | Resolve a payments product by its Accounts ID |
-| `get_mrr(...)` | admin key | Fetch MRR analytics |
-| `initiate_checkout(package_id, *, user_id, ...)` | either key | Start a credit checkout for a user (server-to-server) |
+| `get_product_by_accounts_id(accounts_product_id)` | product key | Resolve a payments product by its Accounts ID |
+| `get_mrr(...)` | product key | Fetch MRR analytics |
+| `initiate_checkout(package_id, *, user_id, ...)` | either key | Start a credit checkout (supports `provider`: `"paddle"`, `"dodo"`, `"bachs"`) |
 | `claim_transaction(user_id, transaction_id)` | either key | Atomically claim a PAID credit transaction |
 | `get_unclaimed_transactions(user_id)` | either key | List PAID + undelivered transactions for a user |
-| `list_packages(*, product_id?)` | admin key | List credit packages |
-| `get_package(package_id)` | admin key | Fetch a credit package by ID |
-| `create_package(...)` | admin key | Create a credit package |
-| `update_package(package_id, ...)` | admin key | Update a credit package |
+| `list_packages(*, product_id?)` | product key | List credit packages |
+| `get_package(package_id)` | product key | Fetch a credit package by ID |
+| `create_package(...)` | product key | Create a credit package |
+| `update_package(package_id, ...)` | product key | Update a credit package |
 | `get_subscription_details(subscription_id)` | either key | Fetch a subscription + billing history (invoices) |
 | `sandbox_checkout(...)` | either key | Generate a sandbox test checkout URL |
 | `list_sandbox_transactions(user_id, ...)` | either key | List a user's sandbox transactions |

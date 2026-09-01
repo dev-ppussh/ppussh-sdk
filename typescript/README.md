@@ -30,7 +30,7 @@ routes accounts calls to the gateway root and payments calls to
 | ------------------------------ | -------------------------------------------------------------- |
 | `PPUSSH_GATEWAY_URL`           | Gateway base URL (single entry for all API calls)              |
 | `PPUSSH_ACCOUNTS_FRONTEND_URL` | Accounts **frontend** base URL (the login page users see)      |
-| `PPUSSH_PAYMENTS_ADMIN_KEY`    | Optional legacy admin key for Payments (product key already authorizes all calls) |
+| `PPUSSH_PAYMENTS_ADMIN_KEY`    | Optional admin key for Payments (product key already authorizes all calls) |
 | `PPUSSH_ACCOUNTS_ADMIN_KEY`    | Optional admin key for Accounts server-to-server entitlement calls |
 
 ```bash
@@ -99,7 +99,22 @@ const subscription = await client.payments.createSubscription({
   paymentProductId: "prod-abc",
   planKey: "pro",
   idempotencyKey: randomUUID(),
+  provider: "paddle", // optional — "paddle" | "dodo" (uses plan default if omitted)
+  returnUrl: "https://yourapp.example.com/billing/success", // optional
 });
+```
+
+### Checkout session (hosted portal)
+
+```ts
+const session = await client.payments.createCheckoutSession({
+  userId: token.user.id,
+  planId: "plan-uuid",
+  returnUrl: "https://yourapp.example.com/billing/success",
+  idempotencyKey: randomUUID(),
+  provider: "paddle", // optional
+});
+// → redirect to session.checkoutUrl
 ```
 
 ### Server-to-server entitlements
@@ -141,6 +156,7 @@ explicit `userId`, then redirect the user to the returned checkout URL.
 const checkout = await client.payments.initiateCheckout("pack_waitly_500", "uuid-of-user", {
   returnUrl: "https://yourapp.example.com/checkout/success",
   idempotencyKey: randomUUID(),
+  provider: "bachs", // optional — "paddle" | "dodo" | "bachs" (uses package default if omitted)
 });
 
 // After payment, claim the credits atomically
@@ -162,7 +178,7 @@ const created = await client.payments.createPackage({
   productId: "prod-abc",
   creditAmount: 500,
   priceCents: 4900, // integer cents — never float
-  providerPriceIds: { paddle: "pri_01abc..." },
+  providerPriceIds: { paddle: "pri_01abc...", bachs: "price_bachs_xxx" },
 });
 
 const updated = await client.payments.updatePackage("pack_waitly_500", { priceCents: 3900 });
@@ -183,6 +199,24 @@ const sb = await client.payments.sandboxCheckout({
 });
 const sbTx = await client.payments.listSandboxTransactions("uuid-of-user");
 const sbClaim = await client.payments.claimSandboxTransaction("uuid-of-user", sb.transactionId);
+```
+
+### Analytics & product lookup
+
+```ts
+// Look up a payments product by its Accounts product ID
+const paymentsProduct = await client.payments.getProductByAccountsId("uuid-of-accounts-product");
+
+// Fetch MRR breakdown (optionally scoped to a product)
+const mrr = await client.payments.getMrr({ productId: "uuid-of-product" });
+console.log(mrr.total_mrr_cents, mrr.by_plan);
+```
+
+### Subscription access check
+
+```ts
+const access = await client.payments.checkAccess(token.user.id, "premium_nodes");
+if (!access.hasAccess) throw new Error("Upgrade required");
 ```
 
 ## Error handling
@@ -238,17 +272,18 @@ try {
 | ------ | ---- | ----------- |
 | `createCustomer(ownerUserId, opts?)` | product key | Create or retrieve a customer record |
 | `getCustomer(customerId)` | product key | Fetch a customer by ID |
-| `createSubscription(opts)` | product key | Create a subscription |
+| `createSubscription(opts)` | product key | Create a subscription (supports `provider`, `returnUrl`) |
 | `listSubscriptions(customerId, opts?)` | product key | List subscriptions for a customer |
 | `getSubscription(subscriptionId)` | product key | Fetch a subscription by ID |
 | `cancelSubscription(subscriptionId, opts?)` | product key | Cancel a subscription |
+| `hasActiveSubscription(customerId)` | product key | Check if customer has an active subscription |
 | `listPlans(paymentProductId)` | product key | List billing plans |
-| `createCheckoutSession(opts)` | product key | Create a checkout session (returns `checkoutUrl`) |
+| `createCheckoutSession(opts)` | product key | Create a checkout session (supports `provider`) |
 | `checkAccess(userId, featureCode, workspaceId?)` | product key | Feature access check |
 | `getPaddleConfig()` | public | Paddle client token + environment |
 | `getProductByAccountsId(accountsProductId)` | product key | Resolve a payments product by its Accounts ID |
 | `getMrr(opts?)` | product key | Fetch MRR analytics |
-| `initiateCheckout(packageId, userId, opts?)` | either key | Start a credit checkout for a user (server-to-server) |
+| `initiateCheckout(packageId, userId, opts?)` | either key | Start a credit checkout (supports `provider`: `"paddle"`, `"dodo"`, `"bachs"`) |
 | `claimTransaction(userId, transactionId)` | either key | Atomically claim a PAID credit transaction |
 | `getUnclaimedTransactions(userId)` | either key | List PAID + undelivered transactions for a user |
 | `listPackages(opts?)` | product key | List credit packages |
