@@ -41,6 +41,9 @@ function errorMessage(data: unknown, fallback: string): string {
     if (isRecord(detail) && typeof detail["message"] === "string" && detail["message"]) {
       return detail["message"] as string;
     }
+    if (typeof data["error"] === "string" && data["error"]) {
+      return data["error"] as string;
+    }
     if (typeof data["message"] === "string" && data["message"]) {
       return data["message"] as string;
     }
@@ -48,13 +51,27 @@ function errorMessage(data: unknown, fallback: string): string {
   return fallback;
 }
 
-async function postJson(apiBaseUrl: string, path: string, body: unknown): Promise<{ status: number; data: unknown }> {
+async function postJson(
+  apiBaseUrl: string,
+  path: string,
+  body: unknown,
+  clientId?: string,
+): Promise<{ status: number; data: unknown }> {
+  const resolvedClientId =
+    clientId ??
+    (isRecord(body) && typeof body["client_id"] === "string" && body["client_id"]
+      ? (body["client_id"] as string)
+      : undefined);
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (resolvedClientId) {
+    headers["X-PPUSSH-Client-ID"] = resolvedClientId;
+  }
   let res: Response;
   try {
     res = await fetch(`${apiBaseUrl}${path}`, {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(body),
     });
   } catch {
@@ -216,33 +233,63 @@ export async function verifyEmailToken(
 }
 
 /** Resend the verification email. Always succeeds (anti-enumeration). */
-export async function resendVerification(apiBaseUrl: string, email: string, captchaToken?: string): Promise<void> {
-  const { status, data } = await postJson(apiBaseUrl, "/auth/resend-verification", {
-    email,
-    ...(captchaToken ? { captcha_token: captchaToken } : {}),
-  });
+export async function resendVerification(
+  apiBaseUrl: string,
+  email: string,
+  clientId?: string,
+  captchaToken?: string,
+): Promise<void> {
+  const { status, data } = await postJson(
+    apiBaseUrl,
+    "/auth/resend-verification",
+    {
+      email,
+      ...(captchaToken ? { captcha_token: captchaToken } : {}),
+    },
+    clientId,
+  );
   if (status !== 204 && status !== 200) {
     throw new PPUSSHError("unknown", errorMessage(data, "Failed to resend verification email"), status);
   }
 }
 
 /** Start password recovery. Always succeeds (anti-enumeration). */
-export async function forgotPassword(apiBaseUrl: string, email: string, captchaToken?: string): Promise<void> {
-  const { status, data } = await postJson(apiBaseUrl, "/auth/forgot-password", {
-    email,
-    ...(captchaToken ? { captcha_token: captchaToken } : {}),
-  });
+export async function forgotPassword(
+  apiBaseUrl: string,
+  email: string,
+  clientId?: string,
+  captchaToken?: string,
+): Promise<void> {
+  const { status, data } = await postJson(
+    apiBaseUrl,
+    "/auth/forgot-password",
+    {
+      email,
+      ...(captchaToken ? { captcha_token: captchaToken } : {}),
+    },
+    clientId,
+  );
   if (status !== 204 && status !== 200) {
     throw new PPUSSHError("unknown", errorMessage(data, "Failed to start password recovery"), status);
   }
 }
 
 /** Complete password reset with the token from the recovery email. */
-export async function resetPassword(apiBaseUrl: string, token: string, newPassword: string): Promise<void> {
-  const { status, data } = await postJson(apiBaseUrl, "/auth/reset-password", {
-    token,
-    new_password: newPassword,
-  });
+export async function resetPassword(
+  apiBaseUrl: string,
+  token: string,
+  newPassword: string,
+  clientId?: string,
+): Promise<void> {
+  const { status, data } = await postJson(
+    apiBaseUrl,
+    "/auth/reset-password",
+    {
+      token,
+      new_password: newPassword,
+    },
+    clientId,
+  );
   if (status !== 200) {
     throw new PPUSSHError("unknown", errorMessage(data, "Password reset failed"), status);
   }

@@ -62,6 +62,14 @@ export interface WaitForPopupOptions {
 }
 
 /**
+ * How long `popup.closed` must stay true before we treat it as a real cancel.
+ * Cross-origin navigations (about:blank → provider → callback) can briefly
+ * report `closed=true` even though the popup is still open — rejecting on the
+ * first sighting caused false "Authentication was cancelled" errors.
+ */
+const CLOSED_GRACE_MS = 1500;
+
+/**
  * Wait for the product callback page (running inside the popup) to post the
  * auth code back. Validates origin, source, and state.
  */
@@ -69,6 +77,7 @@ export function waitForPopupResult(popup: Window, opts: WaitForPopupOptions): Pr
   const timeoutMs = opts.timeoutMs ?? 10 * 60 * 1000;
   return new Promise<PopupAuthResult>((resolve, reject) => {
     let settled = false;
+    let closedSince: number | null = null;
     const timer = window.setTimeout(() => {
       cleanup();
       reject(new PPUSSHError("timeout", "Authentication timed out"));
@@ -76,14 +85,22 @@ export function waitForPopupResult(popup: Window, opts: WaitForPopupOptions): Pr
     const closedPoll = window.setInterval(() => {
       try {
         if (popup.closed) {
-          cleanup();
-          if (!settled) {
-            settled = true;
-            reject(new PPUSSHError("popup_closed", "Authentication was cancelled"));
+          const now = Date.now();
+          if (closedSince === null) {
+            closedSince = now;
+          } else if (now - closedSince >= CLOSED_GRACE_MS) {
+            cleanup();
+            if (!settled) {
+              settled = true;
+              reject(new PPUSSHError("popup_closed", "Authentication was cancelled"));
+            }
           }
+        } else {
+          closedSince = null;
         }
       } catch {
         // Cross-origin access to popup.closed can throw; ignore and keep waiting.
+        closedSince = null;
       }
     }, 500);
 

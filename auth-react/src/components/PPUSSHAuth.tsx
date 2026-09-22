@@ -148,7 +148,7 @@ function AuthFlow({
     setLoading(true);
     setError(null);
     try {
-      await resendVerification(config.apiBaseUrl, pendingEmail);
+      await resendVerification(config.apiBaseUrl, pendingEmail, config.clientId);
       setLoading(false);
     } catch (err) {
       fail(err);
@@ -159,7 +159,7 @@ function AuthFlow({
     setLoading(true);
     setError(null);
     try {
-      await forgotPassword(config.apiBaseUrl, email);
+      await forgotPassword(config.apiBaseUrl, email, config.clientId);
       setView("forgot-sent");
       setLoading(false);
     } catch (err) {

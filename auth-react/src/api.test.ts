@@ -84,6 +84,19 @@ describe("authorizeSignin", () => {
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
     expect(init?.credentials).toBe("include");
   });
+
+  it("sends X-PPUSSH-Client-ID derived from body client_id", async () => {
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> =>
+        new Response(JSON.stringify({ redirect_url: "https://product.com/auth/callback?code=c&state=s1" }), {
+          status: 200,
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    await authorizeSignin(BASE, signinReq);
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect((init?.headers as Record<string, string>)["X-PPUSSH-Client-ID"]).toBe("client-1");
+  });
 });
 
 describe("grantConsent", () => {
@@ -173,8 +186,24 @@ describe("verifyEmailToken", () => {
 describe("resendVerification and forgotPassword", () => {
   it("resolves on 204", async () => {
     mockFetchOnce(204, null);
-    await resendVerification(BASE, "ada@test.com");
+    await resendVerification(BASE, "ada@test.com", "client-1");
     mockFetchOnce(204, null);
-    await forgotPassword(BASE, "ada@test.com");
+    await forgotPassword(BASE, "ada@test.com", "client-1");
+  });
+
+  it("sends X-PPUSSH-Client-ID from the explicit clientId argument", async () => {
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> =>
+        new Response(null, { status: 204 }),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    await forgotPassword(BASE, "ada@test.com", "client-1");
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect((init?.headers as Record<string, string>)["X-PPUSSH-Client-ID"]).toBe("client-1");
+  });
+
+  it("reads the message from the ErrorResponse envelope", async () => {
+    mockFetchOnce(500, { error: "boom", detail: "", request_id: "r1" });
+    await expect(resendVerification(BASE, "ada@test.com", "client-1")).rejects.toThrow("boom");
   });
 });
