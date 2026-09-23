@@ -1,6 +1,6 @@
 {
   "name": "ppussh-react",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "description": "Embeddable PPUSSH authentication (modal + embedded) for products. Accounts remains the source of truth.",
   "author": "PPUSSH <dev@ppussh.com>",
   "homepage": "https://github.com/dev-ppussh/ppussh-sdk#readme",
